@@ -7,23 +7,21 @@ from SensorData import SensorData
 
 def parse_arguments():
     parser = argparse.ArgumentParser()
-    # data paths
     parser.add_argument('--filename', required=True, help='path to sens file to read')
     parser.add_argument('--output_path', required=True, help='path to output folder')
     parser.add_argument('--export_depth_images', dest='export_depth_images', action='store_true')
     parser.add_argument('--export_color_images', dest='export_color_images', action='store_true')
     parser.add_argument('--export_poses', dest='export_poses', action='store_true')
     parser.add_argument('--export_intrinsics', dest='export_intrinsics', action='store_true')
-    parser.set_defaults(export_depth_images=False, export_color_images=False, export_poses=False, export_intrinsics=False)
+    parser.add_argument('--archive_result', dest='archive_result', action='store_true')
+
+    parser.set_defaults(export_depth_images=False, export_color_images=False, export_poses=False, export_intrinsics=False, archive_result=False)
     return parser.parse_args()
 
-def process_sens_file(filename, output_path, export_depth_images, export_color_images, export_poses, export_intrinsics):
-    if not os.path.exists(output_path):
-        os.makedirs(output_path)
-    # load the data
-    sys.stdout.write(f'loading {filename}...')
-    sd = SensorData(filename)
-    sys.stdout.write('loaded!\n')
+def process_sens_file(filename, output_path, export_depth_images, export_color_images, export_poses, export_intrinsics, archive_result):
+    print(f'loading {filename}...')
+    sd = SensorData(filename, archive_result)
+    print("loaded!")
     if export_depth_images:
         sd.export_depth_images(os.path.join(output_path, 'depth'))
     if export_color_images:
