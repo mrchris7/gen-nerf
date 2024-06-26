@@ -1,65 +1,126 @@
 import os
-import time
-import numpy as np
 import argparse
-from reader import process_sens_file
 import tqdm
-from os.path import join
-from os import listdir
-import numpy as np
 import multiprocessing
+from SensorData import SensorData
 
-# paths
-# path_in is the root of the raw scannet dataset (i.e. path_in/scans/scene0000_00)
-# path_out is the root of the processed scannet dataset (i.e. path_out/scene/color/1.jpg)
-path_in = '/home/atuin/g101ea/g101ea13/data/scannet_raw'
-path_out = '/home/atuin/g101ea/g101ea13/data/scannet'
 
-# result
-export_color_images = True
-export_depth_images = True
-export_poses = True
-export_intrinsics = True
+# default paths
+PATH_IN = '$WORK/data/scannet_raw'  # path to the raw scannet dataset
+PATH_OUT = '$WORK/data/scannet'  # path where to build the dataset
 
-# options
-test_only = False
-archive_result = True
-specific_scenes = None  # i.e. ['scans/scene0000_00', 'scans_test/scene0000_01']
-max_scenes = 10
+"""
+Exports the sensor data of the scannet dataset to PATH_OUT using the raw scannet data from PATH_IN
+Used to export color images, depth images, poses and intrinsics of the .sens files inside PATH_IN
+and optionally saves it as an archive instead of individual files
 
-if __name__ == '__main__':
+PATH_OUT
+└───scans
+|   └───scene0000_00
+|   |   └───color
+|   |   │   └───0.jpg |
+|   |   │   └───1.jpg |--> optionally: color.tar
+|   |   |   └───...   |
+|   |   └───depth
+|   |   │   └───0.txt
+|   |   │   └───...
+|   |   └───poses
+|   |   │   └───0.txt
+|   |   │   └───...
+|   |   └───intrinsics
+|   |       └───extrinsic_color.txt     
+|   |       └───extrinsic_depth.txt 
+|   |       └───intrinsic_color.txt
+|   |       └───intrinsic_depth.txt
+|   └───...
+└───scans_test
+    └───scene700_00
+    └───...
+"""
 
-    path_out = join(path_out, 'scans')
-    if not os.path.exists(path_out):
-        os.makedirs(path_out)
-        print("created directory:", path_out)
 
-    if specific_scenes:
-        scenes = specific_scenes
+def parse_arguments():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--path_in', default=PATH_IN, help="Path to input folder")
+    parser.add_argument('--path_out', default=PATH_OUT, help="Path to output folder")
+    parser.add_argument('--export_depth', action='store_true', help="Whether to export depth images")
+    parser.add_argument('--export_color', action='store_true', help="Whether to export color images")
+    parser.add_argument('--export_poses', action='store_true', help="Whether to export poses")
+    parser.add_argument('--export_intrinsics', action='store_true', help="Whether to export camera intrinsics")
+    parser.add_argument('--archive_result', action='store_true', help="Whether to pack the files of all frames into an archive")
+    parser.add_argument('--test_only', action='store_true', help="Only export the test set (if you dont plan to train)")
+    parser.add_argument('--scenes', nargs='+', default=None, help="List of directories of specific scenes to read i.e. scans/scene0000_00, scans_test/scene0000_01, ...")
+    parser.add_argument('--num_scenes', default=-1, type=int, help="Number of scenes to read")
+    return parser.parse_args()
+
+
+def process_sens_file(filename, output_path, export_depth, export_color, export_poses, export_intrinsics, archive_result):
+    print(f"Reading scene: {filename}")
+    sd = SensorData(filename, archive_result)
+    
+    if export_depth:
+        sd.export_depth_images(os.path.join(output_path, 'depth'))
+    if export_color:
+        sd.export_color_images(os.path.join(output_path, 'color'))
+    if export_poses:
+        sd.export_poses(os.path.join(output_path, 'poses'))
+    if export_intrinsics:
+        sd.export_intrinsics(os.path.join(output_path, 'intrinsics'))
+
+
+def main():
+    args = parse_arguments()
+
+    if not (args.export_depth or args.export_color or
+            args.export_poses or args.export_intrinsics):
+        print("Aborted: nothing to export.")
+        return
+
+    # support env-variables inside paths
+    path_in = os.path.expandvars(args.path_in)
+    path_out = os.path.expandvars(args.path_out)
+
+    os.makedirs(path_out, exist_ok=True) 
+    
+    # make subdirectories
+    os.makedirs(os.path.join(path_out, 'scans'), exist_ok=True)
+    os.makedirs(os.path.join(path_out, 'scans_test'), exist_ok=True)
+
+
+    # collect scenes
+    scenes = []
+    if args.scenes:
+        print(f"Reading only specific scenes: {args.scenes}")
+        scenes = args.scenes
     else:
-        scenes = []
-        if not test_only:
+        if not args.test_only:
             scenes += sorted([os.path.join('scans', scene) 
                             for scene in os.listdir(os.path.join(path_in, 'scans'))])
         scenes += sorted([os.path.join('scans_test', scene)
                         for scene in os.listdir(os.path.join(path_in, 'scans_test'))])
 
-    if max_scenes != None:
-        print(f"Processing only the first {max_scenes} scenes")
-        scenes = scenes[:max_scenes]
-
+    if args.num_scenes > -1:
+        print(f"Reading only the first {args.num_scenes} scenes")
+        scenes = scenes[:args.num_scenes]
+    
+    # scenes contain: "scans/scene0000_00" or "scans_test/scene0000_00"
     pbar = tqdm.tqdm()
     pool = multiprocessing.Pool(processes=8)
     for scene in scenes:
         scene_id = scene.split('/')[1]
-        filename = os.path.join(path_in, scene, scene_id + ".sens")
-        path_out_i = os.path.join(path_out, scene_id)
+        filename = os.path.join(path_in, scene, scene_id + '.sens')
+        path_out_scene = os.path.join(path_out, scene)
         pool.apply_async(
             process_sens_file,
-            args=(filename, path_out_i, export_depth_images, export_color_images,
-                  export_poses, export_intrinsics, archive_result),
+            args=(filename, path_out_scene, args.export_depth, args.export_color,
+                  args.export_poses, args.export_intrinsics, args.archive_result),
             callback=lambda _: pbar.update()
         )
         pbar.update()
     pool.close()
     pool.join()
+
+
+if __name__ == '__main__':
+    main()
+    

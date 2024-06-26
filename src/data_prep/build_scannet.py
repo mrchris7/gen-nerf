@@ -1,4 +1,5 @@
 import os
+import argparse
 import shutil
 import tarfile
 import tempfile
@@ -7,55 +8,62 @@ import tqdm
 import multiprocessing
 
 
+# default paths
+PATH_TARGET = '$TMPDIR/data/scannet'  # path where to build the dataset (TMPDIR file system)
+PATH_RAW = '$WORK/data/scannet_raw'  # path to the raw scannet dataset
+PATH_ARCHIVE = '$WORK/data/scannet'  # path to the scannet data that was exported and archived from the .sens file
+
 """
-Builds the scannet dataset in the TMPDIR file system (node-local!)
+Builds the scannet dataset inside PATH_TARGET using the data from PATH_RAW and PATH_ARCHIVE
+Used to unpack files of all frames inside a node-local file system (i.e. TMPDIR)
 
-$TMPDIR
-└───scannet
-|   └───scannetv2-labels.combined.tsv
-|   └───scannetv2_test.txt
-|   └───scannetv2_train.txt
-|   └───scannetv2_val.txt
-│   └───scans
-│   |   └───scene0000_00
-│   |   |   └───scene0000_00.aggregation.json
-│   |   |   └───scene0000_00.txt
-│   |   |   └───scene0000_00_vh_clean_2.0.010000.segs.json
-│   |   |   └───scene0000_00_vh_clean_2.ply
-│   |   |   └───color
-│   |   |   │   └───0.jpg
-│   |   |   │   └───...
-│   |   |   └───depth
-│   |   |   │   └───0.txt
-│   |   |   │   └───...
-│   |   |   └───pose
-│   |   |   │   └───0.txt
-│   |   |   │   └───...
-│   |   |   └───instance-filt
-│   |   |       │   0.png
-│   |   |       └───...
-│   |   └───...
-│   └───scans_test
-│       └───scene700_00
-│       └───...
+PATH_TARGET
+└───scannetv2-labels.combined.tsv
+└───scannetv2_test.txt
+└───scannetv2_train.txt
+└───scannetv2_val.txt
+└───scans
+|   └───scene0000_00
+|   |   └───scene0000_00.aggregation.json
+|   |   └───scene0000_00.txt
+|   |   └───scene0000_00_vh_clean_2.0.010000.segs.json
+|   |   └───scene0000_00_vh_clean_2.ply
+|   |   └───intrinsics
+|   |   │   └───extrinsic_color.txt     
+|   |   │   └───extrinsic_depth.txt
+|   |   │   └───intrinsic_color.txt
+|   |   │   └───intrinsic_depth.txt
+|   |   └───color
+|   |   │   └───0.jpg
+|   |   │   └───...
+|   |   └───depth
+|   |   │   └───0.txt
+|   |   │   └───...
+|   |   └───poses
+|   |   │   └───0.txt
+|   |   │   └───...
+|   |   └───instance-filt
+|   |       └───0.png
+|   |       └───...
+|   └───...
+└───scans_test
+    └───scene700_00
+    └───...
 """
 
-# paths
-# path_target is the root of the scannet dataset in the TMPDIR file system
-# path_raw is the root of the raw scannet dataset (i.e. path_in/scans/scene0000_00)
-# path_tar is the root of the processed scannet dataset (i.e. path_out/scene/color/color.tar)
-path_target = os.path.expandvars('$TMPDIR/data/scannet')
-path_raw = '/home/atuin/g101ea/g101ea13/data/scannet_raw'
-path_tar = '/home/atuin/g101ea/g101ea13/data/scannet'
 
-# options
-test_only = False
-specific_scenes = None  # i.e. ['scans/scene0000_00', 'scans_test/scene0000_01']
-max_scenes = 10
+def parse_arguments():
+    parser = argparse.ArgumentParser(description="Build the scannet dataset")
+    parser.add_argument('--path_target', default=PATH_TARGET, help="Path where to build the dataset")
+    parser.add_argument('--path_raw', default=PATH_RAW, help="Path to the raw scannet dataset")
+    parser.add_argument('--path_archive', default=PATH_ARCHIVE, help="Path to the scannet data that was exported and archived from the .sens file")
+    parser.add_argument('--test_only', action='store_true', help="Only build the test set (if you dont plan to train)")
+    parser.add_argument('--scenes', nargs='+', default=None, help="List of directories of specific scenes to build i.e. scans/scene0000_00, scans_test/scene0000_01, ...")
+    parser.add_argument('--num_scenes', default=-1, type=int, help="Number of scenes to build")
+    return parser.parse_args()
 
 
-
-def build_scene(scene):
+def build_scene(scene, path_target, path_raw, path_archive):
     print("Build scene:", scene)
     _, scene_id = scene.split('/')  
     # _: scans or scans_test
@@ -84,56 +92,77 @@ def build_scene(scene):
             extracted_dir_child = os.path.join(temp_dir, child_name)
             shutil.move(extracted_dir_child, path_scene_target)
             shutil.rmtree(extracted_dir)
+    
+    path_scene_tar = os.path.join(path_archive, 'scans', scene_id)  # test scenes are also inside scans
+    if os.path.exists(path_scene_tar):
+        # copy raw files from path_archive to path_target
+        for folder in ['intrinsics']:
+            dir = os.path.join(path_scene_target, folder)
+            os.makedirs(dir)
+            for file in ['extrinsic_color.txt', 'extrinsic_depth.txt', 'intrinsic_color.txt', 'intrinsic_depth.txt']:
+                shutil.copy(os.path.join(path_scene_tar, folder, file), path_scene_target)
+        
+        # extract tars from path_archive to path_target
+        for folder in ['color', 'depth', 'poses']:
+            tar_file = os.path.join(path_scene_tar, folder, f'{folder}.tar')
 
-    # extract tars from path_tar to path_target
-    path_scene_tar = os.path.join(path_tar, "scans", scene_id)  # test scenes are also inside scans
-    for type in ['color', 'depth', 'pose']:
-        tar_file = os.path.join(path_scene_tar, type, f'{type}.tar')
-
-        dir = os.path.join(path_scene_target, type)
-        os.makedirs(dir)
-        with tarfile.open(tar_file, 'r') as tar:
-            tar.extractall(path=dir, filter='data')
+            dir = os.path.join(path_scene_target, folder)
+            os.makedirs(dir)
+            with tarfile.open(tar_file, 'r') as tar:
+                tar.extractall(path=dir, filter='data')
+    else:
+        print(f"Could not unpack frames of scene {scene} (the .sens file has not yet been read and extracted)")
+        return
 
 
-if __name__ == "__main__":
+def main():
+    args = parse_arguments()
 
-    os.makedirs(path_target)    
+    # support env-variables inside paths
+    path_target = os.path.expandvars(args.path_target)
+    path_raw = os.path.expandvars(args.path_raw)
+    path_archive = os.path.expandvars(args.path_archive)
+
+    os.makedirs(path_target, exist_ok=True) 
 
     # copy scannetv2-labels.combined.tsv
     shutil.copy(os.path.join(path_raw, 'scannetv2-labels.combined.tsv'), path_target)
 
     # copy splits
-    shutil.copy(os.path.join(path_tar, 'scannetv2_train.txt'), path_target)
-    shutil.copy(os.path.join(path_tar, 'scannetv2_test.txt'), path_target)
-    shutil.copy(os.path.join(path_tar, 'scannetv2_val.txt'), path_target)
+    shutil.copy(os.path.join(path_raw, 'scannetv2_train.txt'), path_target)
+    shutil.copy(os.path.join(path_raw, 'scannetv2_test.txt'), path_target)
+    shutil.copy(os.path.join(path_raw, 'scannetv2_val.txt'), path_target)
 
     # make subdirectories
     os.makedirs(os.path.join(path_target, 'scans'))
     os.makedirs(os.path.join(path_target, 'scans_test'))
     #os.makedirs(os.path.join(path_target, "tasks"))
 
-
     # collect scenes
     scenes = []
-    if specific_scenes:
-            scenes = specific_scenes
+    if args.scenes:
+        print(f"Building only specific scenes: {args.scenes}")
+        scenes = args.scenes
     else:
-        if not test_only:
+        if not args.test_only:
             scenes += sorted([os.path.join('scans', scene) 
                             for scene in os.listdir(os.path.join(path_raw, 'scans'))])
         scenes += sorted([os.path.join('scans_test', scene)
                         for scene in os.listdir(os.path.join(path_raw, 'scans_test'))])
 
-    if max_scenes != None:
-        print(f"Building only the first {max_scenes} scenes")
-        scenes = scenes[:max_scenes]
+    if args.num_scenes > -1:
+        print(f"Building only the first {args.num_scenes} scenes")
+        scenes = scenes[:args.num_scenes]
     
     # scenes contain: "scans/scene0000_00" or "scans_test/scene0000_00"
     pbar = tqdm.tqdm()
     pool = multiprocessing.Pool(processes=8)
     for scene in scenes:
-        pool.apply_async(build_scene, args=(scene,), callback=lambda _: pbar.update())
+        pool.apply_async(build_scene, args=(scene, path_target, path_raw, path_archive), callback=lambda _: pbar.update())
         pbar.update()
     pool.close()
     pool.join()
+
+
+if __name__ == '__main__':
+    main()
