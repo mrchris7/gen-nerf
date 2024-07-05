@@ -47,6 +47,7 @@ def parse_arguments():
     parser.add_argument('--export_color', action='store_true', help="Whether to export color images")
     parser.add_argument('--export_poses', action='store_true', help="Whether to export poses")
     parser.add_argument('--export_intrinsics', action='store_true', help="Whether to export camera intrinsics")
+    parser.add_argument('--export_all', action='store_true', help="Whether to export all data")
     parser.add_argument('--archive_result', action='store_true', help="Whether to pack the files of all frames into an archive")
     parser.add_argument('--test_only', action='store_true', help="Only export the test set (if you dont plan to train)")
     parser.add_argument('--scenes', nargs='+', default=None, help="List of directories of specific scenes to read i.e. scans/scene0000_00, scans_test/scene0000_01, ...")
@@ -70,6 +71,12 @@ def process_sens_file(filename, output_path, export_depth, export_color, export_
 
 def main():
     args = parse_arguments()
+
+    if args.export_all:
+        args.export_depth = True
+        args.export_color = True
+        args.export_poses = True
+        args.export_intrinsics = True
 
     if not (args.export_depth or args.export_color or
             args.export_poses or args.export_intrinsics):

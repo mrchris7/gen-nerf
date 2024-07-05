@@ -34,14 +34,14 @@ PATH_TARGET
 |   |   │   └───intrinsic_color.txt
 |   |   │   └───intrinsic_depth.txt
 |   |   └───color
-|   |   │   └───0.jpg
-|   |   │   └───...
+|   |   │   └───0.jpg |--> default: color.tar
+|   |   │   └───...   |
 |   |   └───depth
-|   |   │   └───0.txt
-|   |   │   └───...
+|   |   │   └───0.txt |--> default: depth.tar
+|   |   │   └───...   |
 |   |   └───poses
-|   |   │   └───0.txt
-|   |   │   └───...
+|   |   │   └───0.txt |--> default: poses.tar
+|   |   │   └───...   |
 |   |   └───instance-filt
 |   |       └───0.png
 |   |       └───...
@@ -60,12 +60,13 @@ def parse_arguments():
     parser.add_argument('--test_only', action='store_true', help="Only build the test set (if you dont plan to train)")
     parser.add_argument('--scenes', nargs='+', default=None, help="List of directories of specific scenes to build i.e. scans/scene0000_00, scans_test/scene0000_01, ...")
     parser.add_argument('--num_scenes', default=-1, type=int, help="Number of scenes to build")
+    parser.add_argument('--extract_archives', action='store_true', help="Extract the .tar files for color, depth and poses")
     return parser.parse_args()
 
 
-def build_scene(scene, path_target, path_raw, path_archive):
+def build_scene(scene, path_target, path_raw, path_archive, extract_archives):
     print("Build scene:", scene)
-    _, scene_id = scene.split('/')  
+    scene_f, scene_id = scene.split('/')  
     # _: scans or scans_test
     # scene_id: scene0000_00
 
@@ -74,33 +75,35 @@ def build_scene(scene, path_target, path_raw, path_archive):
 
     # copy raw files from path_raw to path_target
     path_scene_raw = os.path.join(path_raw, scene)
-    shutil.copy(os.path.join(path_scene_raw, scene_id+'_vh_clean_2.0.010000.segs.json'), path_scene_target)
-    shutil.copy(os.path.join(path_scene_raw, scene_id+'.aggregation.json'), path_scene_target)
     shutil.copy(os.path.join(path_scene_raw, scene_id+'_vh_clean_2.ply'), path_scene_target)
     shutil.copy(os.path.join(path_scene_raw, scene_id+'.txt'), path_scene_target)
-    #...
+    if scene_f == 'scans': 
+        shutil.copy(os.path.join(path_scene_raw, scene_id+'_vh_clean_2.0.010000.segs.json'), path_scene_target)
+        shutil.copy(os.path.join(path_scene_raw, scene_id+'.aggregation.json'), path_scene_target)
+        #...
     
     # extract zip files from path_raw to path_target (and remove outer directory-layer)
-    for type in [f'{scene_id}_2d-instance-filt']:
-        zip_file = os.path.join(path_scene_raw, f'{type}.zip')
-        with tempfile.TemporaryDirectory() as temp_dir:
-            with zipfile.ZipFile(zip_file, 'r') as zip:
-                zip.extractall(temp_dir)
-            # remove outer layer
-            extracted_dir = os.path.join(temp_dir)
-            child_name = os.listdir(extracted_dir)[0]
-            extracted_dir_child = os.path.join(temp_dir, child_name)
-            shutil.move(extracted_dir_child, path_scene_target)
-            shutil.rmtree(extracted_dir)
+    if scene_f == 'scans':
+        for type in [f'{scene_id}_2d-instance-filt']:
+            zip_file = os.path.join(path_scene_raw, f'{type}.zip')
+            with tempfile.TemporaryDirectory() as temp_dir:
+                with zipfile.ZipFile(zip_file, 'r') as zip:
+                    zip.extractall(temp_dir)
+                # remove outer layer
+                extracted_dir = os.path.join(temp_dir)
+                child_name = os.listdir(extracted_dir)[0]
+                extracted_dir_child = os.path.join(temp_dir, child_name)
+                shutil.move(extracted_dir_child, path_scene_target)
+                shutil.rmtree(extracted_dir)
     
-    path_scene_tar = os.path.join(path_archive, 'scans', scene_id)  # test scenes are also inside scans
+    path_scene_tar = os.path.join(path_archive, scene_f, scene_id)
     if os.path.exists(path_scene_tar):
         # copy raw files from path_archive to path_target
         for folder in ['intrinsics']:
             dir = os.path.join(path_scene_target, folder)
             os.makedirs(dir)
             for file in ['extrinsic_color.txt', 'extrinsic_depth.txt', 'intrinsic_color.txt', 'intrinsic_depth.txt']:
-                shutil.copy(os.path.join(path_scene_tar, folder, file), path_scene_target)
+                shutil.copy(os.path.join(path_scene_tar, folder, file), dir)
         
         # extract tars from path_archive to path_target
         for folder in ['color', 'depth', 'poses']:
@@ -108,10 +111,13 @@ def build_scene(scene, path_target, path_raw, path_archive):
 
             dir = os.path.join(path_scene_target, folder)
             os.makedirs(dir)
-            with tarfile.open(tar_file, 'r') as tar:
-                tar.extractall(path=dir, filter='data')
+            if extract_archives:
+                with tarfile.open(tar_file, 'r') as tar:
+                    tar.extractall(path=dir, filter='data')
+            else:
+                shutil.copy(tar_file, dir)
     else:
-        print(f"Could not unpack frames of scene {scene} (the .sens file has not yet been read and extracted)")
+        print(f"Could not build frames of scene {scene} (the .sens file has not yet been read and extracted)")
         return
 
 
@@ -158,7 +164,7 @@ def main():
     pbar = tqdm.tqdm()
     pool = multiprocessing.Pool(processes=8)
     for scene in scenes:
-        pool.apply_async(build_scene, args=(scene, path_target, path_raw, path_archive), callback=lambda _: pbar.update())
+        pool.apply_async(build_scene, args=(scene, path_target, path_raw, path_archive, args.extract_archives), callback=lambda _: pbar.update())
         pbar.update()
     pool.close()
     pool.join()
