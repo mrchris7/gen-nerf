@@ -17,7 +17,7 @@
 from PIL import Image, ImageOps
 import numpy as np
 import torch
-
+from src.data_prep.scannet import load_scannet_nyu40_mapping
 
 
 class Compose(object):
@@ -103,6 +103,52 @@ class ResizeImage(object):
 
     def __repr__(self):
         return self.__class__.__name__ + '(size={0})'.format(self.size)
+
+
+class InstanceToSemseg(object):
+    """ Convert instance images to semseg images. Also map to benchmark classes"""
+    def __init__(self, mapping=None):
+        if mapping is None:
+            self.mapping = None
+        elif mapping=='nyu40':
+            self.mapping = {'scannet':load_scannet_nyu40_mapping(),
+                            #'rio':load_rio_nyu40_mapping(),
+                            }
+        else:
+            raise NotImplementedError('dataset mapping %s)'%mapping)
+
+
+    def __call__(self, data):
+        # map all frames
+        if 'frames' in data:
+            for frame in data['frames']:
+                if 'instance' in frame:
+                    instance = frame.pop('instance')
+                    if instance is None:
+                        semseg = -torch.ones(frame['image'].shape[1:], 
+                                             dtype=torch.long)
+                    else:
+                        semseg = -torch.ones_like(instance)
+                        for instance_id, semseg_id in data['instances'].items():
+                            if self.mapping is not None:
+                                # map from raw id to training id (ex:nyu40)
+                                semseg_id = self.mapping[data['dataset']][semseg_id]
+                            semseg[instance==instance_id] = semseg_id
+                    frame['semseg'] = semseg
+
+        # map tsdfs
+        for key in data:
+            if key[:3] == 'vol' and 'instance' in data[key].attribute_vols:
+                instance = data[key].attribute_vols.pop('instance')
+                semseg = -torch.ones_like(instance)
+                for instance_id, semseg_id in data['instances'].items():
+                    if self.mapping is not None:
+                        # map from raw id to training id (ex:nyu40)
+                        semseg_id = self.mapping[data['dataset']][semseg_id]
+                    semseg[instance==instance_id] = semseg_id
+                data[key].attribute_vols['semseg'] = semseg
+
+        return data
 
 
 def transform_space(data, transform, voxel_dim, origin):
@@ -238,3 +284,67 @@ class FlattenTSDF(object):
 
     def __repr__(self):
         return self.__class__.__name__
+
+
+class VizSemseg(object):
+    """ Create a RGB colormap for a semseg image"""
+    def __init__(self, cmap='nyu40'):
+        if cmap=='nyu40':
+            self.cmap = NYU40_COLORMAP
+        else:
+            raise NotImplementedError('%s colormap not defined'%cmap)
+
+    def __call__(self, semseg):
+        color = torch.zeros(3, semseg.size(0), semseg.size(1), dtype=torch.uint8)
+        for i, c in enumerate(self.cmap):
+            mask = semseg==i
+            color[0,mask] = c[0]
+            color[1,mask] = c[1]
+            color[2,mask] = c[2]
+        return color
+
+
+# TODO: move to another file and support other colormaps
+NYU40_COLORMAP = [
+       (0, 0, 0),
+       (174, 199, 232),		# wall
+       (152, 223, 138),		# floor
+       (31, 119, 180), 		# cabinet
+       (255, 187, 120),		# bed
+       (188, 189, 34), 		# chair
+       (140, 86, 75),  		# sofa
+       (255, 152, 150),		# table
+       (214, 39, 40),  		# door
+       (197, 176, 213),		# window
+       (148, 103, 189),		# bookshelf
+       (196, 156, 148),		# picture
+       (23, 190, 207), 		# counter
+       (178, 76, 76),
+       (247, 182, 210),		# desk
+       (66, 188, 102),
+       (219, 219, 141),		# curtain
+       (140, 57, 197),
+       (202, 185, 52),
+       (51, 176, 203),
+       (200, 54, 131),
+       (92, 193, 61),
+       (78, 71, 183),
+       (172, 114, 82),
+       (255, 127, 14), 		# refrigerator
+       (91, 163, 138),
+       (153, 98, 156),
+       (140, 153, 101),
+       (158, 218, 229),		# shower curtain
+       (100, 125, 154),
+       (178, 127, 135),
+       (120, 185, 128),
+       (146, 111, 194),
+       (44, 160, 44),  		# toilet
+       (112, 128, 144),		# sink
+       (96, 207, 209),
+       (227, 119, 194),		# bathtub
+       (213, 92, 176),
+       (94, 106, 211),
+       (82, 84, 163),  		# otherfurn
+       (100, 85, 144)
+    ]

@@ -140,3 +140,64 @@ def log_transform(x, shift=1):
     more than close to the truncation distance
     """
     return x.sign() * (1 + x.abs() / shift).log()
+
+
+def unproj_map(width, height, f, c=None, device="cpu"):
+    """
+    Get camera unprojection map for given image size.
+    [y,x] of output tensor will contain unit vector of camera ray of that pixel.
+    :param width image width
+    :param height image height
+    :param f focal length, either a number or tensor [fx, fy]
+    :param c principal point, optional, either None or tensor [fx, fy]
+    if not specified uses center of image
+    :return unproj map (height, width, 3)
+    """
+    if c is None:
+        c = [width * 0.5, height * 0.5]
+    else:
+        c = c.squeeze()
+    if isinstance(f, float):
+        f = [f, f]
+    elif len(f.shape) == 0:
+        f = f[None].expand(2)
+    elif len(f.shape) == 1:
+        f = f.expand(2)
+    Y, X = torch.meshgrid(
+        torch.arange(height, dtype=torch.float32) - float(c[1]),
+        torch.arange(width, dtype=torch.float32) - float(c[0]),
+        indexing="ij",
+    )
+    X = X.to(device=device) / float(f[0])
+    Y = Y.to(device=device) / float(f[1])
+    Z = torch.ones_like(X)
+    unproj = torch.stack((X, -Y, -Z), dim=-1)
+    unproj /= torch.norm(unproj, dim=-1).unsqueeze(-1)
+    return unproj
+
+
+def gen_rays(poses, width, height, focal, z_near, z_far, c=None):
+    """
+    Generate camera rays
+    :return (B, H, W, 8)
+    """
+    num_images = poses.shape[0]
+    device = poses.device
+    if len(focal.shape) > 0 and focal.shape[-1] > 1:
+        cam_unproj_map = []
+        for img_idx in range(num_images):
+            temp_unproj_map = unproj_map(
+                width, height, focal.squeeze()[img_idx], c=c.squeeze()[img_idx, :], device=device
+            )
+            cam_unproj_map.append(temp_unproj_map)
+        cam_unproj_map = torch.stack(cam_unproj_map, dim=0)
+    else:
+        cam_unproj_map = (
+            unproj_map(width, height, focal.squeeze(), c=c, device=device).unsqueeze(0).repeat(num_images, 1, 1, 1)
+        )
+    cam_centers = poses[:, None, None, :3, 3].expand(-1, height, width, -1)
+    cam_raydir = torch.matmul(poses[:, None, None, :3, :3], cam_unproj_map.unsqueeze(-1))[:, :, :, :, 0]
+
+    cam_nears = torch.tensor(z_near, device=device).view(1, 1, 1, 1).expand(num_images, height, width, -1)
+    cam_fars = torch.tensor(z_far, device=device).view(1, 1, 1, 1).expand(num_images, height, width, -1)
+    return torch.cat((cam_centers, cam_raydir, cam_nears, cam_fars), dim=-1)  # (B, H, W, 8)
