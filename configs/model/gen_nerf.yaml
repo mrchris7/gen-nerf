@@ -1,0 +1,66 @@
+type: 'GenNerf'
+
+optimizer:
+  type: 'Adam'
+  lr: 0.0005  # 0.001
+  weight_decay: 0.0
+
+scheduler:
+  type: 'StepLR'
+  step_size: 300
+  gamma: .1
+
+teacher:
+  none: none
+
+voxel_size: ${data.voxel_size}
+
+backbone3d:
+  channels: [32, 64, 128, 256]
+  layers_down: [1, 2, 3, 4]
+  layers: [3, 2, 1]
+  norm: 'nnSyncBN'
+  drop: 0.
+  conditional_skip: false
+
+head_geo:
+  multi_scale: 4
+  label_smoothing: 0
+  loss_split: 0
+  sparse_threshold: 0
+  loss_weight: 1.
+  loss_log_transform: true
+  loss_log_transform_shift: 1.0
+
+encoder:
+  spatial:
+    backbone: 'resnet34'  # resnet18, resnet34, resnet50
+    pretrained: True
+    num_layers: 4
+    index_interp: 'bilinear'
+    index_padding: 'border'
+    upsample_interp: 'bilinear'
+    feature_scale: 1.0
+    use_first_pool: True
+    norm_type: 'batch'
+  pointnet:  # based on: pointcloud/room_3plane.yaml from conv_onet
+    c_dim: 32  # originally: mode.c_dim
+    dim: 3  # originally: data.dim
+    padding: 0.1  # originally: data.padding
+    hidden_dim: 32
+    scatter_type: 'max'  # or 'min'
+    plane_type: ['xz', 'xy', 'yz']
+    plane_resolution: 128
+    n_blocks: 5
+    unet: True
+    unet_kwargs:
+      depth: 5
+      merge_mode: concat
+      start_filts: 32
+  use_auxiliarynet: false  # whether to additionally encode teacher-features
+
+
+
+
+# compile model for faster training with pytorch 2.0
+compile: false

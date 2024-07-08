@@ -1,0 +1,8 @@
+tensorboard_mesh:
+  _target_: src.utils.tb_mesh_logger.TensorBoardMeshLogger
+  save_dir: "${paths.output_dir}/tensorboard_mesh/"
+  name: null  # TRAINER.NAME
+  log_graph: False
+  default_hp_metric: True
+  prefix: ""
+  # version: ""  # TRAINER.VERSION

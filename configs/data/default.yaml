@@ -1,0 +1,21 @@
+_target_: src.data.datamodule.ScannetDataModule
+data_dir: ${paths.data_dir}
+datasets_train: ['scannet_train.txt']
+datasets_val: ['scannet_val.txt']
+num_workers_train: 2
+num_workers_val: 1
+pin_memory: False
+batch_size_train: 1  # Needs to be divisible by the number of devices (e.g., if in a distributed setup)
+num_frames_train: 50
+num_frames_val: 500
+frame_selection: 'random'
+random_rotation_3d: true
+random_translation_3d: True
+pad_xy_3d: 1.
+pad_z_3d: .25
+voxel_size: .04
+voxel_types: ['tsdf']  # originally: MODEL.HEADS3D.HEADS
+voxel_dim_train: [160, 160, 64]
+voxel_dim_val: [256, 256, 96]
+voxel_dim_test: [416, 416, 128]
+layers_down: ${model.backbone3d.layers_down}
