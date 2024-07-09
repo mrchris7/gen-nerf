@@ -5,7 +5,7 @@ import torch.autograd.profiler as profiler
 import torch.nn.functional as F
 import torchvision
 from torch import nn
-import utils
+from src.models.utils import get_norm_layer
 
 TORCHVISION_WEIGHTS = {
     "resnet18": torchvision.models.resnet.ResNet18_Weights.DEFAULT,
@@ -53,7 +53,7 @@ class SpatialEncoder(nn.Module):
         self.use_custom_resnet = backbone == "custom"
         self.feature_scale = feature_scale
         self.use_first_pool = use_first_pool
-        norm_layer = utils.get_norm_layer(norm_type)
+        norm_layer = get_norm_layer(norm_type)
 
         if torchvision.__version__ >= "0.13.0":
             self.model = getattr(torchvision.models, backbone)(
@@ -161,14 +161,15 @@ class SpatialEncoder(nn.Module):
         return self.latent
 
     @classmethod
-    def from_conf(cls, conf):
+    def from_conf(cls, cfg):
         return cls(
-            conf.get_string("backbone"),
-            pretrained=conf.get_bool("pretrained", True),
-            num_layers=conf.get_int("num_layers", 4),
-            index_interp=conf.get_string("index_interp", "bilinear"),
-            index_padding=conf.get_string("index_padding", "border"),
-            upsample_interp=conf.get_string("upsample_interp", "bilinear"),
-            feature_scale=conf.get_float("feature_scale", 1.0),
-            use_first_pool=conf.get_bool("use_first_pool", True),
+            backbone=cfg.backbone,
+            pretrained=cfg.pretrained,
+            num_layers=cfg.num_layers,
+            index_interp=cfg.index_interp,
+            index_padding=cfg.index_padding,
+            upsample_interp=cfg.upsample_interp,
+            feature_scale=cfg.feature_scale,
+            use_first_pool=cfg.use_first_pool,
+            norm_type=cfg.norm_type,
         )

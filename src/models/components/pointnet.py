@@ -3,11 +3,11 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from src.layers import ResnetBlockFC
 from torch_scatter import scatter_mean, scatter_max
-from src.utils import coordinate2index, normalize_coordinate, normalize_3d_coordinate
-from src.encoder.unet import UNet
-from src.encoder.unet3d import UNet3D
+from src.models.components.layers import ResnetBlockFC
+from src.models.components.unet import UNet
+from src.models.components.unet3d import UNet3D
+from src.models.utils import coordinate2index, normalize_coordinate, normalize_3d_coordinate
 
 
 class LocalPoolPointnet(nn.Module):
@@ -32,7 +32,8 @@ class LocalPoolPointnet(nn.Module):
 
     def __init__(self, c_dim=128, dim=3, hidden_dim=128, scatter_type='max', 
                  unet=False, unet_kwargs=None, unet3d=False, unet3d_kwargs=None, 
-                 plane_resolution=None, grid_resolution=None, plane_type='xz', padding=0.1, n_blocks=5):
+                 plane_resolution=None, grid_resolution=None, plane_type='xz',
+                 padding=0.1, n_blocks=5):
         super().__init__()
         self.c_dim = c_dim
 
@@ -158,3 +159,21 @@ class LocalPoolPointnet(nn.Module):
             fea['yz'] = self.generate_plane_features(p, c, plane='yz')
 
         return fea
+    
+    @classmethod
+    def from_conf(cls, cfg):
+        return cls(
+            c_dim=cfg.c_dim,
+            dim=cfg.dim,
+            hidden_dim=cfg.hidden_dim,
+            scatter_type=cfg.scatter_type,
+            unet=cfg.unet,
+            unet_kwargs=cfg.unet_kwargs,
+            unet3d=False,  # not required
+            unet3d_kwargs=None,  # not required
+            plane_resolution=cfg.plane_resolution,
+            grid_resolution=None,  # not required
+            plane_type=cfg.c_dim,
+            padding=cfg.c_dim,
+            n_blocks=cfg.c_dim,
+        )
