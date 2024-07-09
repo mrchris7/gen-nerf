@@ -2,7 +2,7 @@ import os
 import argparse
 import tqdm
 import multiprocessing
-from SensorData import SensorData
+from src.data.prepare.SensorData import SensorData
 
 
 # default paths

@@ -17,7 +17,7 @@
 from PIL import Image, ImageOps
 import numpy as np
 import torch
-from src.data_prep.scannet import load_scannet_nyu40_mapping
+#from src.data.prepare.scannet import load_scannet_nyu40_mapping
 
 
 class Compose(object):
@@ -104,7 +104,7 @@ class ResizeImage(object):
     def __repr__(self):
         return self.__class__.__name__ + '(size={0})'.format(self.size)
 
-
+'''
 class InstanceToSemseg(object):
     """ Convert instance images to semseg images. Also map to benchmark classes"""
     def __init__(self, mapping=None):
@@ -149,7 +149,7 @@ class InstanceToSemseg(object):
                 data[key].attribute_vols['semseg'] = semseg
 
         return data
-
+'''
 
 def transform_space(data, transform, voxel_dim, origin):
     """ Apply a 3x4 linear transform to the world coordinate system.
@@ -286,6 +286,7 @@ class FlattenTSDF(object):
         return self.__class__.__name__
 
 
+'''
 class VizSemseg(object):
     """ Create a RGB colormap for a semseg image"""
     def __init__(self, cmap='nyu40'):
@@ -302,7 +303,7 @@ class VizSemseg(object):
             color[1,mask] = c[1]
             color[2,mask] = c[2]
         return color
-
+'''
 
 # TODO: move to another file and support other colormaps
 NYU40_COLORMAP = [

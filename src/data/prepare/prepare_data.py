@@ -23,10 +23,10 @@ import numpy as np
 import torch
 import trimesh
 
-from data import SceneDataset, load_info_json
+from src.data.data import SceneDataset, load_info_json
 from scannet import prepare_scannet_scene, prepare_scannet_splits
-import src.transforms as transforms
-from src.tsdf import TSDFFusion, TSDF, coordinates, depth_to_world
+import src.data.transforms as transforms
+from src.data.tsdf import TSDFFusion, TSDF, coordinates, depth_to_world
 
 
 def fuse_scene(path_meta, scene, voxel_size, trunc_ratio=3, max_depth=3,
@@ -81,7 +81,7 @@ def fuse_scene(path_meta, scene, voxel_size, trunc_ratio=3, max_depth=3,
     # get the dataset
     transform = transforms.Compose([transforms.ResizeImage((640,480)),
                                     transforms.ToTensor(),
-                                    transforms.InstanceToSemseg('nyu40'),
+                                    #transforms.InstanceToSemseg('nyu40'),
                                     transforms.IntrinsicsPoseToProjection(),
                                   ])
     frame_types=['depth', 'semseg'] if fuse_semseg else ['depth']

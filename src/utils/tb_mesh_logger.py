@@ -15,8 +15,7 @@
 #  Originating Author: Zak Murez (zak.murez.com)
 
 import os
-from pytorch_lightning.loggers import TensorBoardLogger
-
+from lightning.pytorch.loggers import TensorBoardLogger
 
 class MeshWriter:
     """ Saves mesh to logdir during training"""
@@ -31,7 +30,7 @@ class MeshWriter:
         mesh.export(os.path.join(self._save_path, name))
 
 
-class Logger(TensorBoardLogger):
+class TensorBoardMeshLogger(TensorBoardLogger):
     """ Does tensorboard logging + has a MeshWriter for saving example
     meshes throughout training"""
 

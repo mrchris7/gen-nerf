@@ -19,8 +19,7 @@ import numpy as np
 from skimage import measure
 import torch
 import trimesh
-
-from src.transforms import NYU40_COLORMAP
+from src.data.transforms import NYU40_COLORMAP
 
 
 def coordinates(voxel_dim, device=torch.device('cuda')):

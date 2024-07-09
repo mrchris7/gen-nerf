@@ -209,6 +209,7 @@ def load_scannet_label_mapping(path):
     return mapping
 
 
+'''
 def load_scannet_nyu40_mapping():
     """ Returns a dict mapping scannet Ids to NYU40 Ids
 
@@ -234,3 +235,4 @@ def load_scannet_nyu40_mapping():
             id, nyu40id = int(line[0]), int(line[4])
             mapping[id] = nyu40id
     return mapping
+'''
