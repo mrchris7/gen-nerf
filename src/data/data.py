@@ -14,13 +14,15 @@
 
 #  Originating Author: Zak Murez (zak.murez.com)
 
+import io
 import os
 import json
+import tarfile
 import numpy as np
 from PIL import Image
 import torch
 import trimesh
-from src.tsdf import TSDF
+from src.data.tsdf import TSDF
 
 
 DEPTH_SHIFT = 1000
@@ -62,15 +64,14 @@ def map_frame(frame, frame_types=[], prepare=False):
         if 'depth' in frame_types:
             depth = Image.open(frame['file_name_depth_prep'])
     else:
-        data['image'] = Image.open(frame['file_name_image'])
+        data['image'] = open_from_archive(frame['file_name_image'])
         if 'depth' in frame_types:
-            depth = Image.open(frame['file_name_depth'])
+            depth = open_from_archive(frame['file_name_depth'])
             
     depth = np.array(depth, dtype=np.float32) / DEPTH_SHIFT
     data['depth'] = Image.fromarray(depth)
     data['intrinsics'] = np.array(frame['intrinsics'], dtype=np.float32)
     data['pose'] = np.array(frame['pose'], dtype=np.float32)
-    
     
     return data
 
@@ -93,6 +94,21 @@ def map_tsdf(info, data, voxel_types, voxel_sizes):
                                                voxel_types)
     return data
 
+def open_from_archive(full_path):
+    """ Load the frame from the tar archive."""
+    # first extract tar_path and frame_name from the full_path
+    # i.e. 'scene/color/1.jpg' -> ('scene/color/color.tar', '1.jpg')
+    dir_path, frame_name = os.path.split(full_path)
+    base_dir = os.path.basename(dir_path)
+    tar_path = os.path.join(dir_path, base_dir + '.tar')
+
+    # load frame from tar
+    with tarfile.open(tar_path, 'r') as tar_file:
+        image_member = tar_file.getmember(frame_name)
+        image_file = tar_file.extractfile(image_member)
+        image = Image.open(io.BytesIO(image_file.read()))
+
+    return image
 
 
 class SceneDataset(torch.utils.data.Dataset):
@@ -274,22 +290,22 @@ def collate_fn(data_list):
     return out
 
 
-def parse_splits_list(splits):
+def parse_splits_list(splits, data_dir=None):
     """ Returns a list of info_file paths
     Args:
         splits (list of strings): each item is a path to a .json file 
             or a path to a .txt file containing a list of paths to .json's.
     """
-
     if isinstance(splits, str):
         splits = splits.split()
     info_files = []
     for split in splits:
+        split_path = os.path.join(data_dir, split.lstrip('/')) if data_dir else split
         ext = os.path.splitext(split)[1]
         if ext=='.json':
-            info_files.append(split)
+            info_files.append(split_path)
         elif ext=='.txt':
-            info_files += [info_file.rstrip() for info_file in open(split, 'r')]
+            info_files += [info_file.rstrip() for info_file in open(split_path, 'r')]
         else:
             raise NotImplementedError('%s not a valid info_file type'%split)
     return info_files
