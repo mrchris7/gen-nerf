@@ -227,7 +227,7 @@ class ScenesDataset(torch.utils.data.Dataset):
         frame_ids = self.get_frame_ids(info)
         # print(frame_ids)
         frames = [map_frame(info['frames'][i], self.frame_types)
-                  for i in frame_ids]
+                  for i in frame_ids]  # TODO: move loop into extraction process to only open tar-file only once
 
         data = {'dataset': info['dataset'],
                 'scene': info['scene'],
@@ -249,6 +249,95 @@ class ScenesDataset(torch.utils.data.Dataset):
         if self.frame_selection=='random':
             # select num_frames random frames from the scene
             return torch.randint(len(info['frames']), size=[self.num_frames])
+        else:
+            raise NotImplementedError('frame selection %s'%self.frame_selection)
+        
+
+class ScenesSequencesDataset(torch.utils.data.Dataset):
+    """ Pytorch Dataset for a multiple scenes and multiple sequences per scene
+    
+    getitem loads a sequence of frames from a scene
+    along with the corresponding TSDF for the scene
+    """
+
+    def __init__(self, info_files, num_sequences, sequence_length, num_frames, transform=None, frame_types=[],
+                 frame_selection='random', voxel_types=[], voxel_sizes=[]):
+        """
+        Args:
+            info_files: list of info_json files
+            num_frames: number of frames in the sequence to load
+            transform: apply preprocessing transform to images and TSDF
+            frame_types: which images to load (ex: depth, semseg, etc)
+            frame_selection: how to choose the frames in the sequence
+            voxel_types: list of voxel attributes to load with the TSDF
+            voxel_sizes: list of voxel sizes to load
+        """
+
+        self.info_files = info_files
+        self.num_sequences = num_sequences
+        self.sequence_length = sequence_length
+        self.num_frames = num_frames
+        self.transform = transform
+        self.frame_types = frame_types
+        self.frame_selection = frame_selection
+        self.voxel_types = voxel_types
+        self.voxel_sizes = voxel_sizes
+
+    def __len__(self):
+        # TODO: assert in advance that in each scene, num_sequences sequences can be selected
+        return len(self.info_files) * self.num_sequences
+
+    def __getitem__(self, i):
+        """ Load images and TSDF for scene i"""
+
+        scene_idx, sequence_idx = self.get_indices(i)
+
+
+        info = load_info_json(self.info_files[scene_idx])
+
+        frame_ids = self.get_frame_ids(info, sequence_idx)
+
+        frames = [map_frame(info['frames'][i], self.frame_types)
+                  for i in frame_ids]  # TODO: move loop into extraction process to only open tar-file only once
+
+        data = {'dataset': info['dataset'],
+                'scene': info['scene'],
+                #'instances': info['instances'],
+                'frames': frames}
+
+        # load tsdf volumes
+        data = map_tsdf(info, data, self.voxel_types, self.voxel_sizes)
+
+        # apply transforms
+        if self.transform is not None:
+            data = self.transform(data)
+
+        return data
+
+    def get_indices(self, item_idx):
+        scene_idx = item_idx % self.sequence_length
+        sequence_idx = item_idx // self.sequence_length
+        return scene_idx, sequence_idx
+
+    def get_frame_ids(self, info, sequence_idx):
+        """ Get the ids of the frames to load"""
+        
+        total_num_frames = len(info['frames'])
+        assert((self.num_sequences * self.sequence_length) <= total_num_frames,
+               "Not enough frames to select the specified number of sequences.") 
+
+        # distribute sequences evenly accross all frames of the scene-scan
+        sequence_start_idxs = np.linspace(0, total_num_frames-self.sequence_length, num=self.num_sequences)
+
+        # get start and end frame of the given sequence
+        low = sequence_start_idxs[sequence_idx]
+        high = low + self.sequence_length
+
+        if self.frame_selection=='random':
+            # select num_frames random frames from the sequence (without replacement)
+            sequence = torch.arange(low, high, dtype=float)
+            selected_frame_idxs = torch.multinomial(sequence, self.num_frames)
+            return sequence[selected_frame_idxs].tolist()
         else:
             raise NotImplementedError('frame selection %s'%self.frame_selection)
 

@@ -2,7 +2,7 @@ import torch
 from typing import Any, Dict, Optional
 from lightning import LightningDataModule
 from torch.utils.data import DataLoader
-from data.data import ScenesDataset, collate_fn, parse_splits_list
+from data.data import ScenesSequencesDataset, collate_fn, parse_splits_list
 import src.data.transforms as transforms
 
 
@@ -18,6 +18,8 @@ class ScannetDataModule(LightningDataModule):
         num_workers_val: int,
         pin_memory: bool,
         batch_size_train: int,
+        num_sequences: int,
+        sequence_length: int,
         num_frames_train: int,
         num_frames_val: int,
         frame_selection: str,
@@ -79,9 +81,9 @@ class ScannetDataModule(LightningDataModule):
         """
         transform = self.get_transform(True)
         info_files = parse_splits_list(self.hparams.datasets_train, self.hparams.data_dir)
-        dataset = ScenesDataset(
-            info_files, self.hparams.num_frames_train, transform, self.frame_types,
-            self.hparams.frame_selection, self.voxel_types, self.voxel_sizes
+        dataset = ScenesSequencesDataset(
+            info_files, self.hparams.num_sequences, self.hparams.sequence_length, self.hparams.num_frames_train,
+            transform, self.frame_types, self.hparams.frame_selection, self.voxel_types, self.voxel_sizes
         )
         dataloader = torch.utils.data.DataLoader(
             dataset, batch_size=self.batch_size_per_device, num_workers=self.hparams.num_workers_train,
@@ -96,9 +98,9 @@ class ScannetDataModule(LightningDataModule):
         """
         transform = self.get_transform(False)
         info_files = parse_splits_list(self.hparams.datasets_val, self.hparams.data_dir)
-        dataset = ScenesDataset(
-            info_files, self.hparams.num_frames_val, transform, self.frame_types,
-            self.hparams.frame_selection, self.voxel_types, self.voxel_sizes
+        dataset = ScenesSequencesDataset(
+            info_files, self.hparams.num_sequences, self.hparams.sequence_length, self.hparams.num_frames_val,
+            transform, self.frame_types, self.hparams.frame_selection, self.voxel_types, self.voxel_sizes
         )
         dataloader = torch.utils.data.DataLoader(
             dataset, batch_size=1, num_workers=self.hparams.num_workers_val, collate_fn=collate_fn,

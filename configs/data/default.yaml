@@ -6,9 +6,11 @@ num_workers_train: 2
 num_workers_val: 1
 pin_memory: False
 batch_size_train: 1  # Needs to be divisible by the number of devices (e.g., if in a distributed setup)
-num_frames_train: 50
-num_frames_val: 500
-frame_selection: 'random'
+num_sequences: 10  # How many sequences should be selected from one scene  # TODO support -1 -> maximum possible number of sequences (different for each scene)
+sequence_length: 200  # number of raw frames to be considered as one sequence
+num_frames_train: 20  # number of frames to select from a sequence (-1 = sequence_length)
+num_frames_val: 20
+frame_selection: 'random'  # TODO: support 'evenly_spaced'
 random_rotation_3d: true
 random_translation_3d: True
 pad_xy_3d: 1.
