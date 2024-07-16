@@ -91,6 +91,7 @@ def normalize_coordinate(p, padding=0.1, plane='xz'):
         xy_new[xy_new < 0] = 0.0
     return xy_new
 
+
 def normalize_3d_coordinate(p, padding=0.1):
     ''' Normalize coordinate to [0, 1] for unit cube experiments.
         Corresponds to our 3D model
@@ -203,6 +204,30 @@ def gen_rays(poses, width, height, focal, z_near, z_far, c=None):
     return torch.cat((cam_centers, cam_raydir, cam_nears, cam_fars), dim=-1)  # (B, H, W, 8)
 
 
+# for renderer
+def get_sphere_intersection(cam_loc, ray_directions, r = 1.0):
+    # Input: n_images x 4 x 4 ; n_images x n_rays x 3
+    # Output: n_images * n_rays x 2 (close and far) ; n_images * n_rays
+
+    n_imgs, n_pix, _ = ray_directions.shape
+    cam_loc = cam_loc.unsqueeze(-1)
+    ray_cam_dot = torch.bmm(ray_directions, cam_loc).squeeze()
+    under_sqrt = ray_cam_dot ** 2 - (cam_loc.norm(2,1) ** 2 - r ** 2)
+
+    under_sqrt = under_sqrt.reshape(-1)
+    mask_intersect = under_sqrt > 0
+    
+    sphere_intersections = torch.zeros(n_imgs * n_pix, 2).cuda().float()
+    sphere_intersections[mask_intersect] = torch.sqrt(under_sqrt[mask_intersect]).unsqueeze(-1) * torch.Tensor([-1, 1]).cuda().float()
+    sphere_intersections[mask_intersect] -= ray_cam_dot.reshape(-1)[mask_intersect].unsqueeze(-1)
+
+    sphere_intersections = sphere_intersections.reshape(n_imgs, n_pix, 2)
+    sphere_intersections = sphere_intersections.clamp_min(0.0)
+    mask_intersect = mask_intersect.reshape(n_imgs, n_pix)
+
+    return sphere_intersections, mask_intersect
+
+
 def combine_interleaved(t, inner_dims=(1,), agg_type="average"):
     if len(inner_dims) == 1 and inner_dims[0] == 1:
         return t
@@ -214,3 +239,15 @@ def combine_interleaved(t, inner_dims=(1,), agg_type="average"):
     else:
         raise NotImplementedError("Unsupported combine type " + agg_type)
     return t
+
+def add_dicts(dict1, dict2):
+    if len(dict1.keys) == 0:
+        return dict2
+    
+    if len(dict2.keys) == 0:
+        return dict1
+
+    result = {}
+    for key in dict1:
+        result[key] = dict1.get(key, 0) + dict2.get(key, 0)
+    return result
