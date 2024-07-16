@@ -20,6 +20,24 @@ from torch.nn import functional as F
 from src.models.utils import log_transform
 
 
+class TSDFHeadSimple(nn.Module):
+    def __init__(self, input_dim):
+        super(TSDFHeadSimple, self).__init__()
+
+        self.fc = nn.Linear(input_dim, 1)
+
+    def forward(self, x):
+        """
+        Args:
+            x: Feature tensor of shape (B, N, C)
+        
+        Returns:
+            tsdf: Tensor of shape (B, N, 1) with regressed TSDF values
+        """
+        tsdf = self.fc(x)
+        return tsdf
+    
+    
 class TSDFHead(nn.Module):
     """ Main head that regresses the TSDF"""
 

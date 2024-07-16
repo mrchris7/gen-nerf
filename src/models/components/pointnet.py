@@ -120,7 +120,15 @@ class LocalPoolPointnet(nn.Module):
 
 
     def forward(self, p):
-        batch_size, T, D = p.size()
+        '''
+        Encodes N points into feature planes.
+
+        Args:
+            p (B, N, 3): points
+        
+        Returns:
+            fea (dictionary): feature planes with dimension (B, c_dim, plane_reso, plane_reso)
+        '''
 
         # acquire the index for each point
         coord = {}

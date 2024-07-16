@@ -2,27 +2,115 @@
 
 import itertools
 import torch
+import torch.nn.functional as F
 import lightning as L
-from src.models.utils import farthest_point_sample
-from src.data.tsdf import TSDF
-from src.models.components.heads3d import TSDFHead
-from src.models.components.encoder import Encoder
+from src.models.components.pointnet import LocalPoolPointnet
+from src.models.components.spatial_encoder import SpatialEncoder
+from src.models.components.resnetfc import ResnetFC
+from src.models.components.heads3d import TSDFHeadSimple
+from src.models.utils import add_dicts, farthest_point_sample, normalize_coordinate
+from src.data.tsdf import TSDF, coordinates
+
+
+def backproject(voxel_dim, voxel_size, origin, projection, features):
+    """ Takes 2d features and fills them along rays in a 3d volume
+
+    This function implements eqs. 1,2 in https://arxiv.org/pdf/2003.10432.pdf
+    Each pixel in a feature image corresponds to a ray in 3d.
+    We fill all the voxels along the ray with that pixel's features.
+
+    Args:
+        voxel_dim: size of voxel volume to construct (nx, ny, nz)
+        voxel_size: metric size of each voxel (ex: .04m)
+        origin: origin of the voxel volume (xyz position of voxel (0,0,0))
+        projection (B, 4, 3): projection matrices (intrinsics@extrinsics)
+        features (B, C, H, W): 2d feature tensor to be backprojected into 3d
+
+    Returns:
+        volume (B, C, nx, ny, nz): 3d feature volume
+        valid (B, 1, nx, ny, nz): boolean volume, each voxel contains a 1 if it projects to a
+                                  pixel and 0 otherwise (not in view frustrum of the camera)
+    """
+
+    B = features.size(0)
+    C = features.size(1)
+    device = features.device
+    nx, ny, nz = voxel_dim
+
+    coords = coordinates(voxel_dim, device).unsqueeze(0).expand(B,-1,-1) # (B, 3, H, W, D)
+    world = coords.type_as(projection) * voxel_size + origin.to(device).unsqueeze(2)
+    world = torch.cat((world, torch.ones_like(world[:,:1]) ), dim=1)
+    
+    camera = torch.bmm(projection, world)
+    px = (camera[:,0,:]/camera[:,2,:]).round().type(torch.long)
+    py = (camera[:,1,:]/camera[:,2,:]).round().type(torch.long)
+    pz = camera[:,2,:]
+
+    # voxels in view frustrum
+    height, width = features.size()[2:]
+    valid = (px >= 0) & (py >= 0) & (px < width) & (py < height) & (pz>0) # bxhwd
+
+    # put features in volume
+    volume = torch.zeros(B, C, nx*ny*nz, dtype=features.dtype, 
+                         device=device)
+    for b in range(B):
+        volume[b,:,valid[b]] = features[b,:,py[b,valid[b]], px[b,valid[b]]]
+
+    volume = volume.view(B, C, nx, ny, nz)
+    valid = valid.view(B, 1, nx, ny, nz)
+
+    return volume, valid
+
+
+def trilinear_interpolation(voxel_volume, xyz, origin, voxel_size):
+    """
+    Perform trilinear interpolation to map 3D world points to features in the voxel volume.
+    
+    Args:
+        voxel_volume (B, C, nx, ny, nz): voxel volume
+        xyz (B, N, 3): 3D world points
+        origin (3,): world coordinates of voxel (0, 0, 0)
+        voxel_size: size of each voxel
+    
+    Returns:
+        features (B, N, C): interpolated features
+    """
+    B, C, nx, ny, nz = voxel_volume.shape
+    B, N, _ = xyz.shape
+
+    # normalize points to voxel grid coords and scale points to voxel grid dim
+    xyz_normalized = (xyz - origin.view(1, 1, 3)) / voxel_size
+    scaled_xyz = 2 * (xyz_normalized / torch.tensor([nx-1, ny-1, nz-1], device=xyz.device)) - 1
+
+    # reshape (B, N, 1, 1, 3) to (B, 1, N, 1, 3)
+    scaled_xyz = scaled_xyz.view(B, N, 1, 1, 3).permute(0, 3, 1, 2, 4)
+    
+    features = F.grid_sample(voxel_volume, scaled_xyz, align_corners=True)
+    features = features.view(B, C, N).permute(0, 2, 1) # reshape to (B, N, C)
+    
+    return features
 
 
 class GenNerf(L.LightningModule):
     def __init__(self, cfg):
         super().__init__()
-        
         self.cfg = cfg
 
-        # networks
+        # encoders
+        if cfg.encoder.use_spatial:
+            self.spatial = SpatialEncoder.from_conf(cfg.encoder.spatial)
+        if cfg.encoder.use_pointnet:
+            self.pointnet = LocalPoolPointnet.from_conf(self.cfg.encoder.pointnet)
+
+        # teacher net
         self.f_teacher = None  # TODO
-        self.f_encoder = Encoder.from_cfg(cfg.encoder, self.f_teacher)
-        #self.g_geo = build_backbone3d(cfg)
-        self.head_geo = TSDFHead(cfg.head_geo, cfg.backbone3d.channels, cfg.voxel_size)
-        #self.g_sem = None  # TODO
-        #self.head_sem = NONE  # TODO
+
+        # decoders  
+        self.mlp = ResnetFC.from_conf(cfg.mlp, d_in=3, d_latent=32)  # TODO: check: d_in=dim_points=3, d_latent=dim_encoded_feature
+        #self.head_geo = TSDFHead(cfg.head_geo, cfg.backbone3d.channels, cfg.voxel_size)  # # simpler head required that regresses tsdf-value from feature of point (instead of feature of whole volume)
+        self.head_geo = TSDFHeadSimple(cfg.mlp.d_out_geo)
         
+        # other params
         self.origin = torch.tensor([0,0,0]).view(1,3)
         self.voxel_sizes = [int(cfg.voxel_size*100)*2**i for i in 
                             range(len(cfg.backbone3d.layers_down)-1)]
@@ -38,103 +126,166 @@ class GenNerf(L.LightningModule):
             been seen by a camera view frustrum
         """
 
-        self.volume = 0 ##
-        self.valid = 0 ##
+        # spatial encoder + f_teacher features -> backproject into voxel volume
+        self.volume = 0 
+        self.valid = 0
 
+        # pointnet encoder
+        self.c_plane = 0
+
+
+    # TODO: ultimately this function should be callable multiple times allowing to
+    # accumulate information every time it is called
+    # -> currently PointNet does not support dynamic accumulation:
+    #    if encode() is run again, the initially used pointcloud is gone
     def encode(self, projection, image, depth):
-        """ Encodes image and pointcloud into a 3D feature volume and 
+        """ Encodes image and corresponding pointcloud into a 3D feature volume and 
         accumulates them. This is the first half of the network which
-        is run on every frame.
+        is run on F frames.
 
         Args:
-            projection: bx4x4 pose matrix
-            image: bx3xhxw RGB image
-            depth: bxhxw
-            #feature: bxcxh'xw' feature map (h'=h/stride, w'=w/stride)
+            projection: (B, T, 4, 4) pose matrix
+            image: (B, T, 3, H, W) conditioning rgb-image
+            depth: (B, T, H, W) conditioning depth map
 
         Feature volume is accumulated into self.volume and self.valid
         """
-        
-        self.initialize_volume()
-
+        B = projection.size(0)
+       
         # transpose batch and time so we can accumulate sequentially
-        # (b, seq_len, c, h, w) -> (seq_len, b, c, h, w)
+        # (B, T, 3, H, W) -> (T, B, C, H, W)
         images = image.transpose(0,1)
+        depths = depths.transpose(0,1)
         projections = projection.transpose(0,1)
 
-        # accumulate volume
-        for image, projection in zip(images, projections):
 
-            xyz = calculate_pcd(image, depth, projection)  # TODO
-            sparse_xyz = farthest_point_sample(xyz, self.cfg['num_points'])
-
-            image = self.normalizer(image)
-            self.encode(image, sparse_xyz, projection)
-
-            # encode input
-            feat_encoder = self.f_encoder(image, xyz)
-
-            # build volume
-            volume, valid = self.build_volume(feat_encoder)  # TODO
+        accum_sparse_xyz = 0  # accumulate point cloud for PointNet
+                              # (make it a persistent pointcloud with self.sparse_xyz -> memory intensive)
+        
+        # go through every observation
+        for image, depth, projection in zip(images, depths, projections):
             
-            # accumulate volume
+            # accumulate 3D volume using spatial encoder on 2D data:
+            B, C, H, W = image.size()
+            feat_2d = torch.empty(B, C, H, W)
+            #image = self.normalizer(image) # TODO: normalize?
+
+            if self.cfg.use_spatial:
+                feat_spatial = self.spatialnet(image)
+                feat_2d = torch.cat((feat_2d, feat_spatial), dim=1)  # concat along feature dim C
+
+            if self.cfg.use_auxiliary:
+                feat_aux = self.f_teacher(image)
+                feat_2d = torch.cat((feat_2d, feat_aux), dim=1) # concat along feature dim C
+
+            if self.training:
+                voxel_dim = self.cfg.voxel_dim_train
+            else:
+                voxel_dim = self.cfg.voxel_dim_val
+            volume, valid = backproject(voxel_dim, self.voxel_size, self.origin, projection, feat_2d)
             self.volume = self.volume + volume
             self.valid = self.valid + valid
 
 
-    def inference_geo(self, xyz):
-        """ Refines accumulated features and regresses output TSDF.
-        Decoding part of the network. It should be run once after
-        all frames have been accumulated.
+            # accumulate a sparse 3D point cloud (later passed into PointNet):
+            if self.cfg.use_pointnet:
+                xyz = calculate_xyz(image, depth, projection)  # TODO
+                centroids = farthest_point_sample(xyz, self.cfg['num_points'])
+                sparse_xyz = xyz[torch.arange(B)[:, None], centroids]
+                #sparse_xyz = self.normalizer(sparse_xyz)  # TODO: normalize?
+                accum_sparse_xyz = torch.cat((accum_sparse_xyz, sparse_xyz), dim=1)
+        
+        # build volume using PointNet (currently it does not support dynamic accumulation)
+        if self.cfg.use_pointnet:
+            self.c_plane = self.pointnet(accum_sparse_xyz)  # dict with keys 'xy', 'yz', 'xz' 
+                                                            # each (B, c_dim=512?, plane_reso=128, plane_reso=128)
+
+
+    # TODO: self.padding, self.sample_mode
+    def sample_plane_feature(self, p, c, plane='xz'):
+        xy = normalize_coordinate(p.clone(), plane=plane, padding=self.padding) # normalize to the range of (0, 1)
+        xy = xy[:, :, None].float()
+        vgrid = 2.0 * xy - 1.0 # normalize to (-1, 1)
+        c = F.grid_sample(c, vgrid, padding_mode='border', align_corners=True, mode=self.sample_mode).squeeze(-1)
+        return c
+
+    def map_features(self, xyz):
         """
-
-        volume = self.volume/self.valid
-
-        # remove nans (where self.valid==0)
-        volume = volume.transpose(0,1)
-        volume[:,self.valid.squeeze(1)==0]=0
-        volume = volume.transpose(0,1)
-
-        output = self.g_geo(volume, xyz)
-        return output
-    
-
-    def inference_sem(self, xyz):
-        """ Refines accumulated features and regresses semantic properties.
-        Decoding part of the network. It should be run once after
-        all frames have been accumulated.
+        Map to every point the corresponding feature from the
+        encoded feature representations.
+        
+        Args:
+            xyz (B, N, 3): sampled query points (world space)
+                N number of points
+            
+        Returns:
+            feat (B, N, C): combined features
+                C = c_dim_spatial + c_dim_pointnet + c_dim_auxiliary
         """
+        B, N, _ = xyz.size()
 
-        volume = self.volume/self.valid
+        # combine features from different encodings
+        feat = torch.empty(B, N, 0)
+        if self.cfg.use_pointnet:
+            plane_type = list(self.c_plane.keys())
+            feat_pointnet = 0
+            #if 'grid' in plane_type:
+            #    c_pointnet += self.sample_grid_feature(xyz, c_plane['grid'])
+            if 'xz' in plane_type:
+                feat_pointnet += self.sample_plane_feature(xyz, self.c_plane['xz'], plane='xz')
+            if 'xy' in plane_type:
+                feat_pointnet += self.sample_plane_feature(xyz, self.c_plane['xy'], plane='xy')
+            if 'yz' in plane_type:
+                feat_pointnet += self.sample_plane_feature(xyz, self.c_plane['yz'], plane='yz')
+            feat_pointnet = feat_pointnet.transpose(1, 2)
+            feat = torch.cat((feat, feat_pointnet), dim=-1)
 
-        # remove nans (where self.valid==0)
-        volume = volume.transpose(0,1)
-        volume[:,self.valid.squeeze(1)==0]=0
-        volume = volume.transpose(0,1)
+        if self.cfg.use_spatial or self.cfg.use_auxiliary:
+            volume = self.volume/self.valid
+            # remove nans (where self.valid==0)
+            volume = volume.transpose(0,1)
+            volume[:,self.valid.squeeze(1)==0]=0
+            volume = volume.transpose(0,1)
 
-        x = self.g_sem(volume, xyz)
-        output = self.head_sem(x)
-        return output
+            feat_spatial = trilinear_interpolation(volume, xyz, self.origin, self.cfg.voxel_size)
+            feat = torch.cat((feat, feat_spatial), dim=-1)
+        return feat
 
 
     def forward(self, xyz):
         """
-        Predict (feat_geo, feat_sem) at world space query point xyz.
+        Predict (feat_geo, feat_sem) at world space query points xyz.
         Please call encode first!
-        :param xyz (SB, B, 3)
-        SB is batch of objects
-        B is batch of points (in rays)
-        NS is number of input views
-        :return (SB, B, 4) r g b sigma
-        """
         
-        output_geo = self.inference_geo(xyz)
-        output_sem = self.inference_sem(xyz)
+        Args:
+            xyz (B, N, 3): sampled query points (world space)
+                
+        Returns:
+            output (dict): outputs-dict from head_geo
+                           'feat_geo': (B, N, d_out_geo)
+                           'feat_sem': (B, N, d_out_sem)
+        """
+        B, N, _ = xyz.size()
+        d_out_geo = self.cfg.mlp.d_out_geo
+        d_out_sem = self.cfg.mlp.d_out_sem
+        
+        feat = self.map_features(xyz)
 
-        outputs = {**output_geo, **output_sem}
+        mlp_output = self.mlp(feat, xyz)
+        mlp_output = mlp_output.reshape(B, N, d_out_geo + d_out_sem)
+
+        feat_geo = mlp_output[...,           : d_out_geo            ]
+        feat_sem = mlp_output[..., d_out_geo : d_out_geo + d_out_sem]
+        
+        outputs_geo = self.head_geo(feat_geo)
+        
+        outputs = {**outputs_geo}
+        outputs['feat_geo'] = feat_geo  # torch.identity(feat_geo)  # necessary?
+        outputs['feat_sem'] = feat_sem  # torch.relu(feat_sem)
+
         return outputs
     
-
+    '''
     def postprocess(self, outputs):
         """ Wraps the network output into a TSDF data structure
         
@@ -152,59 +303,75 @@ class GenNerf(L.LightningModule):
             tsdf = TSDF(self.voxel_size, 
                         self.origin,
                         outputs[key+'_tsdf'][i].squeeze(0))
-            '''
-            # add semseg vol
-            if ('semseg' in self.voxel_types) and (key+'_semseg' in outputs):
-                semseg = outputs[key+'_semseg'][i]
-                if semseg.ndim==4:
-                    semseg = semseg.argmax(0)
-                tsdf.attribute_vols['semseg'] = semseg
-
-            # add color vol
-            if 'color' in self.voxel_types:
-                color = outputs[key+'_color'][i]
-                tsdf.attribute_vols['color'] = color
-            '''
+            
+            ## add semseg vol
+            #if ('semseg' in self.voxel_types) and (key+'_semseg' in outputs):
+            #    semseg = outputs[key+'_semseg'][i]
+            #    if semseg.ndim==4:
+            #        semseg = semseg.argmax(0)
+            #    tsdf.attribute_vols['semseg'] = semseg
+            #
+            ## add color vol
+            #if 'color' in self.voxel_types:
+            #    color = outputs[key+'_color'][i]
+            #    tsdf.attribute_vols['color'] = color
+            #
             tsdf_data.append(tsdf)
 
         return tsdf_data
+    '''
 
     def calculate_loss(self, outputs, targets):
-        return self.head_geo.calculate_loss(outputs, targets)
+        loss = {}
+        return loss  # TODO: loss for tsdf-values and rendered features
+
+
+
+
+
+
+
+    ############ DEBUGGING #############
+    # used when testing only GenNerf model
 
     def training_step(self, batch, batch_idx):
-        inputs, targets = batch
+        image = batch['image'] # (B, T, 3, H, W)
+        depth = batch['depth'] # (B, T, 1, H, W)
+        projection = batch['projection']  # world2image
 
-        image = inputs['image']
-        depth = inputs['depth']
-        projection = inputs['projection']  # world2image
-        query_xyz = inputs['query_xyz']
+        self.initialize_volume()
+        self.encode(projection, image, depth)  # encode images of whole sequence at once
 
-        self.encode(projection, image, depth)        
-        outputs = self.forward(query_xyz)
+        # transpose batch and time so we can go through sequentially
+        # (B, T, 3, H, W) -> (T, B, C, H, W)
+        images = image.transpose(0,1)
+        depths = depths.transpose(0,1)
+        projections = projection.transpose(0,1)
 
-        # calculate loss
-        loss = self.calculate_loss(outputs, targets)
-        self.log('loss', loss)
-        return loss
+        total_loss = {}
+        for image, depth, projection in zip(images, depths, projections):
+            xyz = calculate_xyz(image, depth, projection)
+            centroids = farthest_point_sample(xyz, 100)
+            sparse_xyz = xyz[torch.arange(B)[:, None], centroids]
+            outputs = self.forward(sparse_xyz)
+            targets = {}
+            targets['tsdf'] = get_gt_tsdf(batch, sparse_xyz)  # TODO either calculate dynamically or computed in advance
+            targets['feature'] = get_gt_features()
+            loss = self.calculate_loss(outputs, targets)
+            total_loss = add_dicts(total_loss, loss)
+
+        self.log('loss_tsdf', total_loss['tsdf'])
+        self.log('loss_feat', total_loss['feat'])
+        self.log('loss', total_loss['combined'])
+        return total_loss['combined']
     
 
     def validation_step(self, batch, batch_idx):
-        inputs, targets = batch
-        outputs = self.forward(inputs, targets)
-
-        # save validation meshes
-        pred_tsdfs = self.postprocess(outputs)
-        trgt_tsdfs = self.postprocess(targets)
-        self.logger.experiment1.save_mesh(pred_tsdfs[0], inputs['scene'][0]+'_pred.ply')
-        self.logger.experiment1.save_mesh(trgt_tsdfs[0], inputs['scene'][0]+'_trgt.ply')
-
-        # calculate loss
-        loss = self.calculate_loss(outputs, targets)
-        return loss
+        # TODO see training_step
+        return None
 
 
-    def configure_optimizers(self):
+    def configure_optimizers(self):  # TODO: start with only one optimizer/lr
         optimizers = []
         schedulers = []
 
