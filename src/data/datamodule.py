@@ -2,7 +2,7 @@ import torch
 from typing import Any, Dict, Optional
 from lightning import LightningDataModule
 from torch.utils.data import DataLoader
-from data.data import ScenesSequencesDataset, collate_fn, parse_splits_list
+from src.data.data import ScenesSequencesDataset, collate_fn, parse_splits_list
 import src.data.transforms as transforms
 
 
@@ -32,7 +32,6 @@ class ScannetDataModule(LightningDataModule):
         voxel_dim_train: list[int],
         voxel_dim_val: list[int],
         voxel_dim_test: list[int],
-        layers_down: list[int]
     ) -> None:
         """Initialize a `ScannetDataModule`"""
         super().__init__()
@@ -51,8 +50,7 @@ class ScannetDataModule(LightningDataModule):
 
         self.frame_types = ['depth']  # color is always loaded
         self.voxel_types = self.hparams.voxel_types
-        self.voxel_sizes = [int(self.hparams.voxel_size*100)*2**i for i in 
-                            range(len(self.hparams.layers_down)-1)]
+        self.voxel_sizes = [int(self.hparams.voxel_size*100)]
 
 
     def setup(self, stage: Optional[str] = None) -> None:

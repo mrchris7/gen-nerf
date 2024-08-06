@@ -315,8 +315,8 @@ class ScenesSequencesDataset(torch.utils.data.Dataset):
         return data
 
     def get_indices(self, item_idx):
-        scene_idx = item_idx % self.sequence_length
-        sequence_idx = item_idx // self.sequence_length
+        scene_idx = item_idx // self.sequence_length
+        sequence_idx = item_idx % self.sequence_length
         return scene_idx, sequence_idx
 
     def get_frame_ids(self, info, sequence_idx):
@@ -337,7 +337,7 @@ class ScenesSequencesDataset(torch.utils.data.Dataset):
             # select num_frames random frames from the sequence (without replacement)
             sequence = torch.arange(low, high, dtype=float)
             selected_frame_idxs = torch.multinomial(sequence, self.num_frames)
-            return sequence[selected_frame_idxs].tolist()
+            return sequence[selected_frame_idxs].int().tolist()
         else:
             raise NotImplementedError('frame selection %s'%self.frame_selection)
 
