@@ -181,7 +181,7 @@ class LocalPoolPointnet(nn.Module):
             unet3d_kwargs=None,  # not required
             plane_resolution=cfg.plane_resolution,
             grid_resolution=None,  # not required
-            plane_type=cfg.c_dim,
-            padding=cfg.c_dim,
-            n_blocks=cfg.c_dim,
+            plane_type=cfg.plane_type,
+            padding=cfg.padding,
+            n_blocks=cfg.n_blocks,
         )

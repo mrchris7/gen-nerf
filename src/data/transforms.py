@@ -52,9 +52,11 @@ class IntrinsicsPoseToProjection(object):
     """ Convert intrinsics and extrinsics matrices to a single projection matrix"""
     def __call__(self, data):
         for frame in data['frames']:
-            intrinsics = frame.pop('intrinsics')
-            pose = frame.pop('pose')
-            frame['projection'] = intrinsics @ pose.inverse()[:3,:]
+            #intrinsics = frame.pop('intrinsics')  # dont remove
+            #pose = frame.pop('pose') # dont remove
+            intrinsics = frame['intrinsics']
+            pose = frame['pose']
+            frame['projection'] = intrinsics @ pose.inverse()[:3,:]  # world2image-projection
         return data
 
 

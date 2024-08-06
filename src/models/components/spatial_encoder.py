@@ -109,7 +109,7 @@ class SpatialEncoder(nn.Module):
         """
         For extracting ResNet's features.
         :param x image (B, C, H, W)
-        :return latent (B, latent_size, H, W)
+        :return latent (B, latent_size, H, W)  # (actually it is H/2, W/2)
         """
         if self.feature_scale != 1.0:
             x = F.interpolate(
