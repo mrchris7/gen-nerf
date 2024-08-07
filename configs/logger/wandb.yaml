@@ -1,4 +1,5 @@
 # https://wandb.ai
+# parameters: https://docs.wandb.ai/ref/python/init
 
 wandb:
   _target_: lightning.pytorch.loggers.wandb.WandbLogger
@@ -7,10 +8,10 @@ wandb:
   offline: False
   id: null # pass correct id to resume experiment!
   anonymous: null # enable anonymous logging
-  project: "lightning-hydra-template"
+  project: "gen-nerf"
   log_model: False # upload lightning ckpts
   prefix: "" # a string to put at the beginning of metric keys
-  # entity: "" # set to name of your wandb team
+  entity: "irosa-ias" # set to name of your wandb team
   group: ""
   tags: []
-  job_type: ""
+  job_type: "experimental" # train/eval/test/experimental

@@ -14,36 +14,27 @@ teacher:
   none: none
 
 voxel_size: ${data.voxel_size}
-
-backbone3d:
-  channels: [32, 64, 128, 256]
-  layers_down: [1, 2, 3, 4]
-  layers: [3, 2, 1]
-  norm: 'nnSyncBN'
-  drop: 0.
-  conditional_skip: false
-
-head_geo:
-  multi_scale: 4
-  label_smoothing: 0
-  loss_split: 0
-  sparse_threshold: 0
-  loss_weight: 1.
-  loss_log_transform: true
-  loss_log_transform_shift: 1.0
+voxel_dim_train: ${data.voxel_dim_train}
+voxel_dim_val: ${data.voxel_dim_val}
+voxel_dim_test: ${data.voxel_dim_test}
+num_rays: 512
+num_points_per_ray: 32  # or 64
 
 encoder:
+  use_spatial: true
   spatial:
     backbone: 'resnet34'  # resnet18, resnet34, resnet50
-    pretrained: True
-    num_layers: 4
+    pretrained: true
+    num_layers: 3 # latent_size = [0, 64, 128, 256, 512, 1024][num_layers]  # initially 4 -> CUDA out of memory
     index_interp: 'bilinear'
     index_padding: 'border'
     upsample_interp: 'bilinear'
     feature_scale: 1.0
-    use_first_pool: True
+    use_first_pool: true
     norm_type: 'batch'
+  use_pointnet: true
   pointnet:  # based on: pointcloud/room_3plane.yaml from conv_onet
+    num_sparse_points: 512
     c_dim: 32  # originally: mode.c_dim
     dim: 3  # originally: data.dim
     padding: 0.1  # originally: data.padding
@@ -57,8 +48,38 @@ encoder:
       depth: 5
       merge_mode: concat
       start_filts: 32
-  use_auxiliarynet: false  # whether to additionally encode teacher-features
+    sample_mode: bilinear # bilinear / nearest (for decoding feature-planes)
+  use_auxiliary: false  # whether to additionally encode teacher-features
 
+mlp:
+    d_out_sem: 64  # semantic feature
+    d_out_geo: 16  # geometric feature -> tsdf   # TODO: check what is the input dim of the tsdf-head3d
+    n_blocks: 5
+    d_hidden: 512
+    combine_layer: 3
+    combine_type: average
+    beta: 0.0
+    use_spade: False
+  #code:  # positional encoding
+  #  num_freqs: 6
+  #  freq_factor: 1.5
+  #  include_input: True
+ 
+#backbone3d:
+#  channels: [32, 64, 128, 256]
+#  layers_down: [1, 2, 3, 4]
+#  layers: [3, 2, 1]
+#  norm: 'nnSyncBN'
+#  drop: 0.
+#  conditional_skip: false
+#head_geo:
+#  multi_scale: 4
+#  label_smoothing: 0
+#  loss_split: 0
+#  sparse_threshold: 0
+#  loss_weight: 1.
+#  loss_log_transform: true
+#  loss_log_transform_shift: 1.0
 
 
 

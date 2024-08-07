@@ -2,8 +2,8 @@ _target_: src.data.datamodule.ScannetDataModule
 data_dir: ${paths.data_dir}
 datasets_train: ['scannet_train.txt']
 datasets_val: ['scannet_val.txt']
-num_workers_train: 2
-num_workers_val: 1
+num_workers_train: 15
+num_workers_val: 15
 pin_memory: False
 batch_size_train: 1  # Needs to be divisible by the number of devices (e.g., if in a distributed setup)
 num_sequences: 10  # How many sequences should be selected from one scene  # TODO support -1 -> maximum possible number of sequences (different for each scene)
@@ -20,4 +20,15 @@ voxel_types: ['tsdf']  # originally: MODEL.HEADS3D.HEADS
 voxel_dim_train: [160, 160, 64]
 voxel_dim_val: [256, 256, 96]
 voxel_dim_test: [416, 416, 128]
-layers_down: ${model.backbone3d.layers_down}
+
+###If we assume that images for building the feature-space should be 
+###different than the images used as ground-truth for the decoding and rendering.
+###  
+###num_sequences_per_scene: 5  # how many sequences should be sampled per scene
+###sequence_area: 100  # length of the sequence from which frames are to be sampled
+###num_observation_frames_train: 3  # how many observation frames to sample from a sequence
+###num_observation_frames_val: 3
+###num_novel_frames_train: 1  # how many novel frames to sample
+###num_novel_frames_val: 5
+#### frame_step_range: (5, 10)  # min and max step between two frames
+#### observation_frame_step: 25  # time step between observation frames

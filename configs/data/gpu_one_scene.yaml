@@ -1,0 +1,8 @@
+defaults:
+  - gpu
+  
+datasets_train: ['/scans/scene0000_00/info.json']
+datasets_val: ['/scans/scene0000_01/info.json']
+num_sequences: 25  # all sequences possible for scene0000_00
+num_frames_train: 5
+num_frames_val: 5
