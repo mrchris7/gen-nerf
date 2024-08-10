@@ -1,12 +1,12 @@
 # reference: https://github.com/autonomousvision/unisurf/blob/main/model/rendering.py
 import torch
 import lightning as L
-from data.data import ScenesDataset, collate_fn, parse_splits_list
-from src.models.utils import add_dicts, gen_rays, get_sphere_intersection
-import data.transforms as transforms
+import numpy as np
+from src.models.utils import add_dicts, arange_pixels, get_mask, get_sphere_intersection, image_points_to_world, origin_to_world, sample_patch_points
+import src.data.transforms as transforms
 
 
-
+epsilon = 1e-6
 class UNISURFRenderer(L.LightningModule):
     ''' Renderer class containing unisurf
     surf rendering and phong rendering(adapted from IDR)
@@ -376,8 +376,10 @@ class UNISURFRenderer(L.LightningModule):
     def training_step(self, batch, batch_idx):
 
         image = batch['image']  # (B, T, 3, H, W)
-        depth = batch['depth']  # (B, T, 1, H, W)
-        projection = batch['projection']  # world2image
+        depth = batch['depth']  # (B, T, H, W)
+        pose = batch['pose']  # (B, T, 4, 4) camera2world
+        intrinsics = batch['intrinsics']  # (B, T, 3, 3)
+        projection = batch['projection']  # (B, T, 3, 4) world2image
 
         self.model.initialize_volume()
         self.model.encode(projection, image, depth)  # encode images of whole sequence at once
@@ -394,17 +396,22 @@ class UNISURFRenderer(L.LightningModule):
         # transpose batch and time so we can go through sequentially
         # (B, T, 3, H, W) -> (T, B, C, H, W)
         images = image.transpose(0,1)
-        depths = depths.transpose(0,1)
+        depths = depth.transpose(0,1)
+        poses = pose.transpose(0,1)
+        intrinsicss = intrinsics.transpose(0,1)
         projections = projection.transpose(0,1)
 
         total_loss = {}
-        for image, depth, projection in zip(images, depths, projections):
+        for image, depth, pose, intrinsics, projection in zip(images, depths, poses, intrinsicss, projections):
             ################################################
             ################################################
             n_points = self.n_training_points
             
-            # TODO: image, extrinsics, intrinsics, identity ?
-            (img, world_mat, camera_mat, scale_mat) = self.process_data_dict(batch)
+            #(img, world_mat, camera_mat, scale_mat) = self.process_data_dict(batch)
+            img = image
+            world_mat = torch.linalg.inv(pose)  # world matrix => inverse of pose/extrinsics
+            camera_mat = intrinsics
+            scale_mat = torch.eye(4)
 
             # Shortcuts
             device = self.device
@@ -419,7 +426,8 @@ class UNISURFRenderer(L.LightningModule):
                 p = p.to(device) 
                 pix = pix.to(device)
 
-            outputs = self.forward(p, camera_mat, world_mat, scale_mat, it=it, eval=False)
+            # TODO: check if self.global_step is correct to use here
+            outputs = self.forward(p, camera_mat, world_mat, scale_mat, it=self.global_step, eval=False)
             
             #rgb_gt = get_tensor_values(img, pix.clone())
             #loss_dict = self.loss(outputs['rgb'], rgb_gt, outputs['normal'])
@@ -488,7 +496,7 @@ class UNISURFRenderer(L.LightningModule):
 
 
     def loss_tsdf(self, outputs, targets):
-        return torch.nn.MSELoss(outputs['tsdf'], targets['tsdf'])
+        return self.model.loss_tsdf(outputs, targets)
     
     def loss_feat(self, outputs, targets):
         return torch.nn.MSELoss(outputs['feat'], targets['feat'])
