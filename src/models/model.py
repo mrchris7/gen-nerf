@@ -3,6 +3,7 @@
 import itertools
 import cv2
 import numpy as np
+import open3d as o3d
 import torch
 import torch.nn.functional as F
 import lightning as L
@@ -114,8 +115,7 @@ class GenNerf(L.LightningModule):
             encoder_latent += 0 # self.cfg.f_teacher.feature_dim
         
         # decoders
-        # self.d_latent + self.d_in == x.shape(-1)
-        self.mlp = ResnetFC.from_conf(cfg.mlp, d_in=3, d_latent=encoder_latent)  # TODO: check: d_in=dim_points=3, d_latent=dim_encoded_feature
+        self.mlp = ResnetFC.from_conf(cfg.mlp, d_in=3, d_latent=encoder_latent)
         #self.head_geo = TSDFHead(cfg.head_geo, cfg.backbone3d.channels, cfg.voxel_size)  # # simpler head required that regresses tsdf-value from feature of point (instead of feature of whole volume)
         self.head_geo = TSDFHeadSimple(cfg.mlp.d_out_geo)
         
@@ -169,7 +169,7 @@ class GenNerf(L.LightningModule):
 
 
         accum_sparse_xyz = torch.empty(B, 0, 3, device=device)  # accumulate point cloud for PointNet
-                                                                  # (make it a persistent pointcloud with self.sparse_xyz -> memory intensive)
+                                                                # (make it a persistent pointcloud with self.sparse_xyz -> memory intensive)
         
         # go through every observation
         for image, depth, projection in zip(images, depths, projections):
@@ -204,6 +204,13 @@ class GenNerf(L.LightningModule):
                 #sparse_xyz = self.normalizer(sparse_xyz)  # TODO: normalize?
                 accum_sparse_xyz = torch.cat((accum_sparse_xyz, sparse_xyz), dim=1)
         
+        ######
+        #point_cloud_np = accum_sparse_xyz[0].cpu().numpy()
+        #point_cloud_o3d = o3d.geometry.PointCloud()
+        #point_cloud_o3d.points = o3d.utility.Vector3dVector(point_cloud_np)
+        #o3d.io.write_point_cloud("/home/atuin/g101ea/g101ea13/debug/point_cloud_x2.ply", point_cloud_o3d)
+        ######
+
         # build volume using PointNet (currently it does not support dynamic accumulation)
         if self.cfg.encoder.use_pointnet:
             self.c_plane = self.pointnet(accum_sparse_xyz)  # dict with keys 'xy', 'yz', 'xz' 
@@ -388,7 +395,7 @@ class GenNerf(L.LightningModule):
             ###########
 
             xyz = get_3d_points(image, depth, projection)
-            centroids = farthest_point_sample(xyz, 512)
+            centroids = farthest_point_sample(xyz, self.cfg.num_points)
             sparse_xyz = xyz[torch.arange(B)[:, None], centroids]
             outputs = self.forward(sparse_xyz)
             targets = {}
@@ -396,14 +403,16 @@ class GenNerf(L.LightningModule):
             loss = self.calculate_loss(outputs, targets)
             total_loss = add_dicts(total_loss, loss)
 
-        self.log('loss_tsdf', total_loss['tsdf'], batch_size=B)
-        self.log('loss', total_loss['combined'], batch_size=B)
+        self.log('loss_tsdf', total_loss['tsdf'], batch_size=B, sync_dist=True)
+        #self.log('loss', total_loss['combined'], batch_size=B, sync_dist=True)
         return total_loss['combined']
     
 
     def validation_step(self, batch, batch_idx):
         return self.training_step(batch, batch_idx)
 
+    def test_step(self, batch, batch_idx):
+        return self.training_step(batch, batch_idx)
 
     def configure_optimizers(self):
         optimizers = []
@@ -414,7 +423,6 @@ class GenNerf(L.LightningModule):
         ###params_backbone2d = self.backbone2d[0].parameters()
         modules = [self.mlp,
                    self.head_geo,
-                   #self.f_teacher
                   ]
         if self.cfg.encoder.use_spatial:
             modules.append(self.spatial)

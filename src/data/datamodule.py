@@ -111,8 +111,7 @@ class ScannetDataModule(LightningDataModule):
 
         :return: The test dataloader.
         """
-        # TODO: see evaluate.py of conv_onets
-        return None 
+        return self.val_dataloader()
 
     def get_transform(self, is_train):
         """ Gets a transform to preprocess the input data."""

@@ -24,7 +24,7 @@ import torch
 import trimesh
 
 from src.data.data import SceneDataset, load_info_json
-from scannet import prepare_scannet_scene, prepare_scannet_splits
+from src.data.prepare.scannet import prepare_scannet_scene, prepare_scannet_splits
 import src.data.transforms as transforms
 from src.data.tsdf import TSDFFusion, TSDF, coordinates, depth_to_world
 
@@ -238,7 +238,7 @@ def clean_info(scene, path_meta):
 
     json.dump(data, open(info_file, 'w'))
 
-def prepare_scannet(path, path_meta, i=0, n=1, test_only=False, max_depth=3, skip_existing=False):
+def prepare_scannet(path, path_meta, i=0, n=1, test_only=False, max_depth=3, skip_existing=False, verbose=2):
     """ Create all derived data need for the Scannet dataset
 
     For each scene an info.json file is created containg all meta data required
@@ -256,6 +256,7 @@ def prepare_scannet(path, path_meta, i=0, n=1, test_only=False, max_depth=3, ski
         test_only: only prepare the test set (for rapid testing if you dont 
             plan to train)
         max_depth: mask out large depth values since they are noisy
+        verbose: how much logging to print
 
     Returns:
         Writes files to path_meta
@@ -276,7 +277,7 @@ def prepare_scannet(path, path_meta, i=0, n=1, test_only=False, max_depth=3, ski
     for scene in scenes:
         prepare_scannet_scene(scene, path, path_meta)
         for voxel_size in [4,8,16]:
-            fuse_scene(path_meta, scene, voxel_size, device=i%8, max_depth=max_depth, skip_existing=skip_existing)
+            fuse_scene(path_meta, scene, voxel_size, device=i%8, max_depth=max_depth, skip_existing=skip_existing, verbose=verbose)
             #if scene.split('/')[0]=='scans':
             #    label_scene(path_meta, scene, voxel_size)
     
@@ -299,6 +300,8 @@ if __name__ == "__main__":
         help='mask out large depth values since they are noisy')
     parser.add_argument('--skip_existing', action='store_true',
         help='skip creation of individual tsdf and volume files if they already exist')
+    parser.add_argument('--verbose', default=1, type=int,
+        help='how much logging to print')
     args = parser.parse_args()
 
     i=args.i
@@ -312,5 +315,6 @@ if __name__ == "__main__":
         n,
         args.test,
         args.max_depth,
-        args.skip_existing
+        args.skip_existing,
+        args.verbose
     )

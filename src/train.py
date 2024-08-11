@@ -35,6 +35,7 @@ from src.utils import (
     instantiate_loggers,
     log_hyperparameters,
     task_wrapper,
+    finish,
 )
 
 log = RankedLogger(__name__, rank_zero_only=True)
@@ -90,7 +91,6 @@ def train(cfg: DictConfig) -> Tuple[Dict[str, Any], Dict[str, Any]]:
 
     train_metrics = trainer.callback_metrics
 
-    '''
     if cfg.get("test"):
         log.info("Starting testing!")
         ckpt_path = trainer.checkpoint_callback.best_model_path
@@ -105,9 +105,18 @@ def train(cfg: DictConfig) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     # merge train and test metrics
     metric_dict = {**train_metrics, **test_metrics}
 
+    # Make sure everything closed properly
+    log.info("Finalizing!")
+    finish(
+        config=cfg,
+        model=model,
+        datamodule=datamodule,
+        trainer=trainer,
+        callbacks=callbacks,
+        logger=logger,
+    )
+
     return metric_dict, object_dict
-    '''
-    return None, None
 
 
 @hydra.main(version_base="1.3", config_path="../configs", config_name="train.yaml")
@@ -124,7 +133,6 @@ def main(cfg: DictConfig) -> Optional[float]:
     # train the model
     metric_dict, _ = train(cfg)
 
-    '''
     # safely retrieve metric value for hydra-based hyperparameter optimization
     metric_value = get_metric_value(
         metric_dict=metric_dict, metric_name=cfg.get("optimized_metric")
@@ -132,7 +140,7 @@ def main(cfg: DictConfig) -> Optional[float]:
 
     # return optimized metric
     return metric_value
-    '''
+
 
 if __name__ == "__main__":
     main()

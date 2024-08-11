@@ -1,4 +1,8 @@
 import warnings
+import pytorch_lightning as pl
+import wandb
+from typing import Dict, List
+from lightning.pytorch.loggers import WandbLogger, Logger
 from importlib.util import find_spec
 from typing import Any, Callable, Dict, Optional, Tuple
 
@@ -117,3 +121,19 @@ def get_metric_value(metric_dict: Dict[str, Any], metric_name: Optional[str]) ->
     log.info(f"Retrieved metric value! <{metric_name}={metric_value}>")
 
     return metric_value
+
+# https://github.com/UT-Austin-RPL/Ditto/blob/c9bd94ede2aa4343f59f52bc1e3b1e3eccd96484/src/train.py#L89
+def finish(
+    config: DictConfig,
+    model: pl.LightningModule,
+    datamodule: pl.LightningDataModule,
+    trainer: pl.Trainer,
+    callbacks: List[pl.Callback],
+    logger: List[Logger],
+) -> None:
+    """Makes sure everything closed properly."""
+
+    # without this sweeps with wandb logger might crash!
+    for lg in logger:
+        if isinstance(lg, WandbLogger):
+            wandb.finish()

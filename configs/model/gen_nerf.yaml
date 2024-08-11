@@ -19,6 +19,7 @@ voxel_dim_val: ${data.voxel_dim_val}
 voxel_dim_test: ${data.voxel_dim_test}
 num_rays: 512
 num_points_per_ray: 32  # or 64
+num_points: 512  # directly sample points (if renderer is not used)
 
 encoder:
   use_spatial: true
