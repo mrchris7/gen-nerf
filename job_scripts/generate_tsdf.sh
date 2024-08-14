@@ -4,7 +4,7 @@
 #SBATCH --job-name=generate_tsdf
 
 # Settings
-#SBATCH --mail-type=END
+#SBATCH --mail-type=NONE
 #SBATCH --export=NONE
 
 # Output files
@@ -12,7 +12,7 @@
 #SBATCH --error=/home/hpc/g101ea/g101ea13/job_out/slurm_job_%A.err
 
 # Hardware
-#SBATCH --gres=gpu:a100:1
+#SBATCH --gres=gpu:a40:1
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 
@@ -44,15 +44,21 @@ echo slurm_gpus_on_node="$SLURM_GPUS_ON_NODE"
 echo ------------------------------------------
 
 # execute
-CMD="python $HOME/workspace/gennerf/gen-nerf/src/data_prep/build_scannet.py --num_scenes 10"
+CMD="python $HOME/workspace/gennerf/gen-nerf/scripts/build_scannet.py\
+ --path_target $TMPDIR/data/scannet\
+ --path_raw $WORK/data/scannet_raw\
+ --path_archive $WORK/data/scannet\
+ --extract_archives\
+ --num_scenes 10"
 echo ${CMD}
 ${CMD}
 
 echo "Dataset built!"
 
-CMD="python $HOME/workspace/tools/Atlas/prepare_data.py --path $TMPDIR/data/ --path_meta $WORK/data/scannet_meta --dataset scannet"
+CMD="python $HOME/workspace/gennerf/gen-nerf/src/data/prepare/prepare_data.py\
+ --path $TMPDIR/data/scannet\
+ --path_meta $WORK/data/scannet" # --skip_existing
 echo ${CMD}
-
 ${CMD}
 EXITCODE=$?
 

@@ -1,7 +1,7 @@
 #!/bin/bash -l
 
 # Name
-#SBATCH --job-name=read_scannet
+#SBATCH --job-name=train_tsdf
 
 # Settings
 #SBATCH --mail-type=NONE
@@ -16,13 +16,13 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 
-#SBATCH --cpus-per-task=16  # too much: 64
+#SBATCH --cpus-per-task=8  # too much: 64
 
 # SBATCH --exclusive
 # SBATCH --mem-per-cpu=3250M  # outdated
 
 # Max time (hh:mm:ss)
-#SBATCH --time=01:00:00
+#SBATCH --time=02:00:00
 
 # load modules
 unset SLURM_EXPORT_ENV
@@ -34,8 +34,12 @@ module load python/3.9-anaconda
 # set number of threads to requested cpus-per-task
 export OMP_NUM_THREADS=$SLURM_CPUS_PER_TASK 
 
+# enable connection to internet for wandb-logger
+export HTTP_PROXY=http://proxy:80
+export HTTPS_PROXY=http://proxy:80
+
 # activate env
-conda activate gen-nerf
+conda activate gen-nerf-cuda118
 
 echo --------------- START --------------------
 echo nproc=$(nproc)
@@ -44,11 +48,7 @@ echo slurm_gpus_on_node="$SLURM_GPUS_ON_NODE"
 echo ------------------------------------------
 
 # execute
-CMD="python $HOME/workspace/gennerf/gen-nerf/src/data_prep/read_scannet.py\
- --path_in $WORK/data/scannet_raw\
- --path_out $WORK/data/scannet\
- --export_all\
- --archive_result"
+CMD="python $HOME/workspace/gennerf/gen-nerf/src/train.py logger=wandb"
 
 echo ${CMD}
 ${CMD}
