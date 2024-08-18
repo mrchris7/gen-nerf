@@ -2,14 +2,17 @@ _target_: src.data.datamodule.ScannetDataModule
 data_dir: ${paths.data_dir}
 datasets_train: ['scannet_train.txt']
 datasets_val: ['scannet_val.txt']
+datasets_test: ['scannet_test.txt']
 num_workers_train: 15
 num_workers_val: 15
+num_workers_test: 15
 pin_memory: False
 batch_size_train: 1  # Needs to be divisible by the number of devices (e.g., if in a distributed setup)
 num_sequences: 10  # How many sequences should be selected from one scene  # TODO support -1 -> maximum possible number of sequences (different for each scene)
 sequence_length: 200  # number of raw frames to be considered as one sequence
 num_frames_train: 20  # number of frames to select from a sequence (-1 = sequence_length)
 num_frames_val: 20
+num_frames_test: 20
 frame_selection: 'random'  # TODO: support 'evenly_spaced'
 random_rotation_3d: true
 random_translation_3d: True

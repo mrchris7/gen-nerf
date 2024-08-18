@@ -14,14 +14,17 @@ class ScannetDataModule(LightningDataModule):
         data_dir: str,
         datasets_train: list[str],
         datasets_val: list[str],
+        datasets_test: list[str],
         num_workers_train: int,
         num_workers_val: int,
+        num_workers_test: int,
         pin_memory: bool,
         batch_size_train: int,
         num_sequences: int,
         sequence_length: int,
         num_frames_train: int,
         num_frames_val: int,
+        num_frames_test: int,
         frame_selection: str,
         random_rotation_3d: bool,
         random_translation_3d: bool,
@@ -77,7 +80,7 @@ class ScannetDataModule(LightningDataModule):
 
         :return: The train dataloader.
         """
-        transform = self.get_transform(True)
+        transform = self.get_transform('train')
         info_files = parse_splits_list(self.hparams.datasets_train, self.hparams.data_dir)
         dataset = ScenesSequencesDataset(
             info_files, self.hparams.num_sequences, self.hparams.sequence_length, self.hparams.num_frames_train,
@@ -94,7 +97,7 @@ class ScannetDataModule(LightningDataModule):
 
         :return: The validation dataloader.
         """
-        transform = self.get_transform(False)
+        transform = self.get_transform('val')
         info_files = parse_splits_list(self.hparams.datasets_val, self.hparams.data_dir)
         dataset = ScenesSequencesDataset(
             info_files, self.hparams.num_sequences, self.hparams.sequence_length, self.hparams.num_frames_val,
@@ -111,12 +114,22 @@ class ScannetDataModule(LightningDataModule):
 
         :return: The test dataloader.
         """
-        return self.val_dataloader()
+        transform = self.get_transform('test')
+        info_files = parse_splits_list(self.hparams.datasets_test, self.hparams.data_dir)
+        dataset = ScenesSequencesDataset(
+            info_files, self.hparams.num_sequences, self.hparams.sequence_length, self.hparams.num_frames_test,
+            transform, self.frame_types, self.hparams.frame_selection, self.voxel_types, self.voxel_sizes
+        )
+        dataloader = torch.utils.data.DataLoader(
+            dataset, batch_size=1, num_workers=self.hparams.num_workers_test, collate_fn=collate_fn,
+            shuffle=False, drop_last=False, pin_memory=self.hparams.pin_memory
+        )
+        return dataloader
 
-    def get_transform(self, is_train):
+    def get_transform(self, mode):
         """ Gets a transform to preprocess the input data."""
 
-        if is_train:
+        if mode == "train":
             voxel_dim = self.hparams.voxel_dim_train
             random_rotation = self.hparams.random_rotation_3d
             random_translation = self.hparams.random_translation_3d
@@ -124,14 +137,20 @@ class ScannetDataModule(LightningDataModule):
             paddingZ = self.hparams.pad_z_3d
         else:
             # center volume
-            voxel_dim = self.hparams.voxel_dim_val
+            if mode == "val":
+                voxel_dim = self.hparams.voxel_dim_val
+            elif mode == "test":
+                voxel_dim = self.hparams.voxel_dim_test
+            else:
+                raise NotImplementedError(f"Usage of unknown mode: {mode}")
+                
             random_rotation = False
             random_translation = False
             paddingXY = 0
             paddingZ = 0
 
         transform = []
-        transform += [transforms.ResizeImage((640,480)),
+        transform += [transforms.ResizeImage((640,480)),  # TODO: 640,480 good size? -> define in config?
                       transforms.ToTensor(),
                       #transforms.InstanceToSemseg('nyu40'),
                       transforms.RandomTransformSpace(
