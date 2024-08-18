@@ -51,6 +51,7 @@ def parse_arguments():
     parser.add_argument('--archive_result', action='store_true', help="Whether to pack the files of all frames into an archive")
     parser.add_argument('--test_only', action='store_true', help="Only export the test set (if you dont plan to train)")
     parser.add_argument('--scenes', nargs='+', default=None, help="List of directories of specific scenes to read i.e. scans/scene0000_00, scans_test/scene0000_01, ...")
+    parser.add_argument('--scenes_file', default=None, help="Text file that contains a list of directories of specific scenes to read i.e. scans/scene0000_00, scans_test/scene0000_01, ...")
     parser.add_argument('--num_scenes', default=-1, type=int, help="Number of scenes to read")
     return parser.parse_args()
 
@@ -97,19 +98,48 @@ def main():
     # collect scenes
     scenes = []
     if args.scenes:
-        print(f"Reading only specific scenes: {args.scenes}")
-        scenes = args.scenes
-    else:
-        if not args.test_only:
-            scenes += sorted([os.path.join('scans', scene) 
-                            for scene in os.listdir(os.path.join(path_in, 'scans'))])
-        scenes += sorted([os.path.join('scans_test', scene)
-                        for scene in os.listdir(os.path.join(path_in, 'scans_test'))])
+        print(f"Reading specific scenes: {args.scenes}")
+        scenes += args.scenes
+
+    if args.scenes_file:
+        scenes_file = os.path.expandvars(args.scenes_file)
+        print(f"Reading scenes from file: {args.scenes_file}")
+        ext = os.path.splitext(scenes_file)[1]
+        if ext=='.txt':
+            scenes += [scene.rstrip() for scene in open(scenes_file, 'r')]
+        else:
+            raise NotImplementedError(f"{ext} not a valid scenes_file type")
 
     if args.num_scenes > -1:
-        print(f"Reading only the first {args.num_scenes} scenes")
-        scenes = scenes[:args.num_scenes]
+        print(f"Reading the first {args.num_scenes} scenes")
+        all_scenes = []
+        all_scenes += sorted([os.path.join('scans', scene) 
+                                for scene in os.listdir(os.path.join(path_in, 'scans'))])
+        all_scenes += sorted([os.path.join('scans_test', scene)
+                        for scene in os.listdir(os.path.join(path_in, 'scans_test'))])
+        scenes += all_scenes[:args.num_scenes]
     
+    if not args.scenes and not args.scenes_file and not args.num_scenes:
+        if not args.test_only:
+            print(f"Reading all scenes")
+            scenes += sorted([os.path.join('scans', scene) 
+                                for scene in os.listdir(os.path.join(path_in, 'scans'))])
+        else:
+            print(f"Reading only the test scenes")
+            
+        scenes += sorted([os.path.join('scans_test', scene)
+                        for scene in os.listdir(os.path.join(path_in, 'scans_test'))])
+    else:
+        if args.test_only:
+            print("Flag \"--test_only\" has no effect")
+    
+    # remove duplicates and sort
+    scenes = sorted(list(dict.fromkeys(scenes)))
+    print("Scenes to read:", len(scenes))
+
+    for scene in scenes:
+        print(scene)
+
     # scenes contain: "scans/scene0000_00" or "scans_test/scene0000_00"
     pbar = tqdm.tqdm()
     pool = multiprocessing.Pool(processes=8)

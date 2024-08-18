@@ -44,7 +44,7 @@ echo slurm_gpus_on_node="$SLURM_GPUS_ON_NODE"
 echo ------------------------------------------
 
 # execute
-CMD="python $HOME/workspace/gennerf/gen-nerf/src/data_prep/read_scannet.py\
+CMD="python $HOME/workspace/gennerf/gen-nerf/scripts/read_scannet.py\
  --path_in $WORK/data/scannet_raw\
  --path_out $WORK/data/scannet\
  --export_all\

@@ -59,6 +59,7 @@ def parse_arguments():
     parser.add_argument('--path_archive', default=PATH_ARCHIVE, help="Path to the scannet data that was exported and archived from the .sens file")
     parser.add_argument('--test_only', action='store_true', help="Only build the test set (if you dont plan to train)")
     parser.add_argument('--scenes', nargs='+', default=None, help="List of directories of specific scenes to build i.e. scans/scene0000_00, scans_test/scene0000_01, ...")
+    parser.add_argument('--scenes_file', default=None, help="Text file that contains a list of directories of specific scenes to read i.e. scans/scene0000_00, scans_test/scene0000_01, ...")
     parser.add_argument('--num_scenes', default=-1, type=int, help="Number of scenes to build")
     parser.add_argument('--extract_archives', action='store_true', help="Extract the .tar files for color, depth and poses")
     return parser.parse_args()
@@ -139,6 +140,11 @@ def main():
     shutil.copy(os.path.join(path_raw, 'scannetv2_test.txt'), path_target)
     shutil.copy(os.path.join(path_raw, 'scannetv2_val.txt'), path_target)
 
+    # copy custom splits
+    shutil.copy(os.path.join(path_raw, 'scannetv2_living_train.txt'), path_target)
+    shutil.copy(os.path.join(path_raw, 'scannetv2_living_test.txt'), path_target)
+    shutil.copy(os.path.join(path_raw, 'scannetv2_living_val.txt'), path_target)
+
     # make subdirectories
     os.makedirs(os.path.join(path_target, 'scans'))
     os.makedirs(os.path.join(path_target, 'scans_test'))
@@ -147,22 +153,51 @@ def main():
     # collect scenes
     scenes = []
     if args.scenes:
-        print(f"Building only specific scenes: {args.scenes}")
-        scenes = args.scenes
-    else:
-        if not args.test_only:
-            scenes += sorted([os.path.join('scans', scene) 
-                            for scene in os.listdir(os.path.join(path_raw, 'scans'))])
-        scenes += sorted([os.path.join('scans_test', scene)
-                        for scene in os.listdir(os.path.join(path_raw, 'scans_test'))])
+        print(f"Building specific scenes: {args.scenes}")
+        scenes += args.scenes
+
+    if args.scenes_file:
+        scenes_file = os.path.expandvars(args.scenes_file)
+        print(f"Building scenes from file: {args.scenes_file}")
+        ext = os.path.splitext(scenes_file)[1]
+        if ext=='.txt':
+            scenes += [scene.rstrip() for scene in open(scenes_file, 'r')]
+        else:
+            raise NotImplementedError(f"{ext} not a valid scenes_file type")
 
     if args.num_scenes > -1:
-        print(f"Building only the first {args.num_scenes} scenes")
-        scenes = scenes[:args.num_scenes]
+        print(f"Building the first {args.num_scenes} scenes")
+        all_scenes = []
+        all_scenes += sorted([os.path.join('scans', scene) 
+                                for scene in os.listdir(os.path.join(path_raw, 'scans'))])
+        all_scenes += sorted([os.path.join('scans_test', scene)
+                        for scene in os.listdir(os.path.join(path_raw, 'scans_test'))])
+        scenes += all_scenes[:args.num_scenes]
     
+    if not args.scenes and not args.scenes_file and not args.num_scenes:
+        if not args.test_only:
+            print(f"Building all scenes")
+            scenes += sorted([os.path.join('scans', scene) 
+                                for scene in os.listdir(os.path.join(path_raw, 'scans'))])
+        else:
+            print(f"Building only the test scenes")
+            
+        scenes += sorted([os.path.join('scans_test', scene)
+                        for scene in os.listdir(os.path.join(path_raw, 'scans_test'))])
+    else:
+        if args.test_only:
+            print("Flag \"--test_only\" has no effect")
+    
+    # remove duplicates and sort
+    scenes = sorted(list(dict.fromkeys(scenes)))
+    print("Scenes to build:", len(scenes))
+
+    for scene in scenes:
+        print(scene)
+
     # scenes contain: "scans/scene0000_00" or "scans_test/scene0000_00"
     pbar = tqdm.tqdm()
-    pool = multiprocessing.Pool(processes=8)
+    pool = multiprocessing.Pool(processes=16)
     for scene in scenes:
         pool.apply_async(build_scene, args=(scene, path_target, path_raw, path_archive, args.extract_archives), callback=lambda _: pbar.update())
         pbar.update()

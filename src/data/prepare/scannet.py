@@ -164,6 +164,11 @@ def prepare_scannet_splits(path, path_meta):
     splits = [('scannet_train.txt', 'scans', 'scannetv2_train.txt'), 
               ('scannet_val.txt', 'scans', 'scannetv2_val.txt'),
               ('scannet_test.txt', 'scans_test', 'scannetv2_test.txt'),
+              
+              # custom splits:
+              ('scannet_living_train.txt', 'scans', 'scannetv2_living_train.txt'), 
+              ('scannet_living_val.txt', 'scans', 'scannetv2_living_val.txt'),
+              ('scannet_living_test.txt', 'scans', 'scannetv2_living_test.txt')
              ]
     for name, folder, fname in splits:
         with open(os.path.join(path_meta, name), 'w') as out_file:

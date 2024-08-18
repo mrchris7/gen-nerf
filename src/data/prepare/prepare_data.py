@@ -66,14 +66,17 @@ def fuse_scene(path_meta, scene, voxel_size, trunc_ratio=3, max_depth=3,
     # check if tsdf and volume is already created
     file_name_vol = os.path.join(path_meta, scene, 'tsdf_%02d.npz'%voxel_size)
     file_name_mesh = os.path.join(path_meta, scene, 'mesh_%02d.ply'%voxel_size)
+
+    info_file = os.path.join(path_meta, scene, 'info.json')
     
     if skip_existing:
         if os.path.exists(file_name_vol) and os.path.exists(file_name_mesh):
             if verbose>0:
                 print("Skip fusion because tsdf and mesh files exist.")
+            
+            # still update json with path to voxel volume
+            update_info_json(info_file, voxel_size, file_name_vol)
             return
-
-    info_file = os.path.join(path_meta, scene, 'info.json')
 
     # get gpu device for this worker
     device = torch.device('cuda', device) # gpu for this process
@@ -143,6 +146,10 @@ def fuse_scene(path_meta, scene, voxel_size, trunc_ratio=3, max_depth=3,
         mesh = tsdf.get_mesh('instance')
         mesh.export(file_name_mesh.replace('.ply','_semseg.ply'))
 
+    update_info_json(info_file, voxel_size, file_name_vol)
+    
+
+def update_info_json(info_file, voxel_size, file_name_vol):
     # update info json
     data = load_info_json(info_file)
     data['file_name_vol_%02d'%voxel_size] = file_name_vol

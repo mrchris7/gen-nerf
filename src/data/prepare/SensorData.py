@@ -102,7 +102,7 @@ class SensorData:
                     tar.add(depth_filename, arcname=os.path.basename(depth_filename))
                     os.remove(depth_filename)
         else:    
-            print('exporting', len(self.frames)//frame_skip, ' depth frames to', output_dir)
+            print('Exporting', len(self.frames)//frame_skip, ' depth frames to', output_dir)
             for f in range(0, len(self.frames), frame_skip):
                 depth_data = self.frames[f].decompress_depth(self.depth_compression_type)
                 depth = np.frombuffer(depth_data, dtype=np.uint16).reshape(self.depth_height, self.depth_width)
@@ -126,7 +126,7 @@ class SensorData:
         
         if self.archive_result:
             archive_name = os.path.basename(output_dir)
-            print('exporting', len(self.frames)//frame_skip, 'color frames to', output_dir, "(as a .tar)")
+            print('Exporting', len(self.frames)//frame_skip, 'color frames to', output_dir, "(as a .tar)")
             archive_filename = os.path.join(output_dir, archive_name + '.tar')
             with tarfile.open(archive_filename, 'w') as tar:
                 for f in range(0, len(self.frames), frame_skip):
@@ -138,7 +138,7 @@ class SensorData:
                     tar.add(image_filename, arcname=os.path.basename(image_filename))
                     os.remove(image_filename)
         else:
-            print('exporting', len(self.frames)//frame_skip, 'color frames to', output_path)
+            print('Exporting', len(self.frames)//frame_skip, 'color frames to', output_path)
             for f in range(0, len(self.frames), frame_skip):
                 color = self.frames[f].decompress_color(self.color_compression_type)
                 if image_size is not None:
@@ -162,7 +162,7 @@ class SensorData:
         
         if self.archive_result:
             archive_name = os.path.basename(output_dir)
-            print('exporting', len(self.frames)//frame_skip, 'camera poses to', output_dir, "(as a .tar)")
+            print('Exporting', len(self.frames)//frame_skip, 'camera poses to', output_dir, "(as a .tar)")
             tar_filename = os.path.join(output_dir, archive_name + '.tar')
             with tarfile.open(tar_filename, 'w') as tar:
                 for f in range(0, len(self.frames), frame_skip):
@@ -171,7 +171,7 @@ class SensorData:
                     tar.add(file_to_save, arcname=os.path.basename(file_to_save))
                     os.remove(file_to_save)
         else:
-            print('exporting', len(self.frames)//frame_skip, 'camera poses to', output_dir)
+            print('Exporting', len(self.frames)//frame_skip, 'camera poses to', output_dir)
             for f in range(0, len(self.frames), frame_skip):
                 file_to_save = os.path.join(output_dir, str(f) + '.txt')
                 self.save_mat_to_file(self.frames[f].camera_to_world, file_to_save)
@@ -186,7 +186,7 @@ class SensorData:
         if not os.path.exists(output_dir):
             os.makedirs(output_dir)
 
-        print('exporting camera intrinsics to', output_dir)
+        print('Exporting camera intrinsics to', output_dir)
         self.save_mat_to_file(self.intrinsic_color, os.path.join(output_dir, 'intrinsic_color.txt'))
         self.save_mat_to_file(self.extrinsic_color, os.path.join(output_dir, 'extrinsic_color.txt'))
         self.save_mat_to_file(self.intrinsic_depth, os.path.join(output_dir, 'intrinsic_depth.txt'))
