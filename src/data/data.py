@@ -75,6 +75,48 @@ def map_frame(frame, frame_types=[], prepare=False):
     
     return data
 
+
+def map_frames(frames, frame_ids, frame_types=[], prepare=False):
+    """ Load images and metadata for frame_ids of frames.
+
+    Given an info json we use this to load the images, etc for a all frames
+
+    Args:
+        frames: dicts with metadata and paths to image files
+            (see datasets/README)
+        frame_ids: frame ids to load
+        frame_types: which images to load (ex: depth, semseg, etc)
+
+    Returns:
+        dict containg metadata plus the loaded images
+    """
+
+    # copy data of given frame ids
+    frames_data = []
+    for i in frame_ids:
+        frames_data.append(frames[i].copy())
+
+    if prepare:
+        # images are stored unpacked (not used here)
+        for data in frames_data:
+            data['image'] = Image.open(data['file_name_image_prep'])
+            if 'depth' in frame_types:
+                depth = Image.open(data['file_name_depth_prep'])
+                depth = np.array(depth, dtype=np.float32) / DEPTH_SHIFT
+                data['depth'] = Image.fromarray(depth)
+    else:
+        # images are stored in an archive
+        add_images(frames_data, is_depth=False)
+        if 'depth' in frame_types:
+            add_images(frames_data, is_depth=True)
+    
+    for data in frames_data:
+        data['intrinsics'] = np.array(data['intrinsics'], dtype=np.float32)
+        data['pose'] = np.array(data['pose'], dtype=np.float32)
+    
+    return frames_data
+
+
 def map_tsdf(info, data, voxel_types, voxel_sizes):
     """ Load TSDFs from paths in info.
 
@@ -109,6 +151,44 @@ def open_from_archive(full_path):
         image = Image.open(io.BytesIO(image_file.read()))
 
     return image
+
+def add_images(frames_data, is_depth=False):
+    """ Load all frames from the tar archive using the data dict."""
+    # first construct the tar_path from the path to one frame
+    # i.e. 'scene/color/1.jpg' -> 'scene/color/color.tar'
+    
+    if is_depth:
+        first_frame_name = frames_data[0]['file_name_depth']  # assume all frames are in same tar
+    else:
+        first_frame_name = frames_data[0]['file_name_image']  # assume all frames are in same tar
+    dir_path, _ = os.path.split(first_frame_name)  # -> ('scene/color', '1.jpg')
+    base_dir = os.path.basename(dir_path)  # -> 'color'
+    tar_path = os.path.join(dir_path, base_dir + '.tar')
+
+    # load frames from tar
+    with tarfile.open(tar_path, 'r') as tar_file:
+        for data in frames_data:
+            if is_depth:
+                file_name = data['file_name_depth']
+            else:
+                file_name = data['file_name_image']
+            frame_name = os.path.split(file_name)[1] # x.jpg
+            image_member = tar_file.getmember(frame_name)
+            image_file = tar_file.extractfile(image_member)
+            image = Image.open(io.BytesIO(image_file.read()))
+
+            # add to data dict
+            if is_depth:
+                image = np.array(image, dtype=np.float32) / DEPTH_SHIFT
+                data['depth'] = Image.fromarray(image)
+            else:
+                data['image'] = image
+
+def find_first_higher_index(list, val):
+        # find the index of the first element that is higher than val
+        for i, x in enumerate(list):
+            if x > val:
+                return i
 
 
 class SceneDataset(torch.utils.data.Dataset):
@@ -260,46 +340,83 @@ class ScenesSequencesDataset(torch.utils.data.Dataset):
     along with the corresponding TSDF for the scene
     """
 
-    def __init__(self, info_files, num_sequences, sequence_length, num_frames, transform=None, frame_types=[],
-                 frame_selection='random', voxel_types=[], voxel_sizes=[]):
+    def __init__(self, info_files, sequence_amount, sequence_length, sequence_locations,
+                 sequence_order, num_frames, frame_locations, frame_order,
+                 transform=None, frame_types=[], voxel_types=[], voxel_sizes=[]):
         """
         Args:
             info_files: list of info_json files
+            sequence_amount: [0.0, 1.0] controls the number of sequences scene-denpendently
+            sequence_length: number of raw frames to be considered as one sequence
+            sequence_locations: the location of sequences in a scene
+            sequence_order: choose the sequence order
             num_frames: number of frames in the sequence to load
+            frame_locations: the location of frames in a sequence
+            frame_order: choose the sequence order
             transform: apply preprocessing transform to images and TSDF
             frame_types: which images to load (ex: depth, semseg, etc)
-            frame_selection: how to choose the frames in the sequence
             voxel_types: list of voxel attributes to load with the TSDF
             voxel_sizes: list of voxel sizes to load
         """
 
         self.info_files = info_files
-        self.num_sequences = num_sequences
+        self.sequence_amount = sequence_amount
         self.sequence_length = sequence_length
+        self.sequence_locations = sequence_locations
+        self.sequence_order = sequence_order
         self.num_frames = num_frames
+        self.frame_locations = frame_locations
+        self.frame_order = frame_order
         self.transform = transform
         self.frame_types = frame_types
-        self.frame_selection = frame_selection
         self.voxel_types = voxel_types
         self.voxel_sizes = voxel_sizes
+        
+        start_idxs_list = []
+        num_sequences_list = []
+        for info_file in self.info_files:
+            # calculate num sequences for each scene
+            info = load_info_json(info_file)
+            num_scene_frames = len(info['frames'])
+            num_sequences = int(self.sequence_amount * (num_scene_frames / self.sequence_length))
+            num_sequences_list.append(num_sequences)
+
+            # calculate start indices for each sequence of each scene
+            start_idxs = self.calculate_start_idxs(num_scene_frames, num_sequences)
+
+            if self.sequence_order=='random':
+                pass  # already random
+            elif self.sequence_order=='sorted':
+                start_idxs.sort()
+            else:
+                raise NotImplementedError(f"sequence_order: {self.sequence_order}")
+
+            start_idxs_list.append(start_idxs)
+
+        self.num_sequences_list = num_sequences_list
+        self.start_idxs_list = start_idxs_list
 
     def __len__(self):
-        # TODO: assert in advance that in each scene, num_sequences sequences can be selected
-        return len(self.info_files) * self.num_sequences
+        return sum(self.num_sequences_list)
 
     def __getitem__(self, i):
         """ Load images and TSDF for scene i"""
+        assert(i>=0)
 
         scene_idx, sequence_idx = self.get_indices(i)
-
-
         info = load_info_json(self.info_files[scene_idx])
+        frame_ids = self.get_frame_ids(scene_idx, sequence_idx)
 
-        frame_ids = self.get_frame_ids(info, sequence_idx)
+        if self.frame_order=='random':
+            pass  # already random
+        elif self.sequence_order=='sorted':
+            frame_ids.sort()
+        else:
+            raise NotImplementedError(f"sequence_order: {self.sequence_order}")
 
-        frames = [map_frame(info['frames'][i], self.frame_types)
-                  for i in frame_ids]  # TODO: move loop into extraction process to only open tar-file only once
-
+        #print("frame_ids", frame_ids)
+        frames = map_frames(info['frames'], frame_ids, self.frame_types)
+        
         data = {'dataset': info['dataset'],
                 'scene': info['scene'],
                 #'instances': info['instances'],
@@ -314,32 +431,65 @@ class ScenesSequencesDataset(torch.utils.data.Dataset):
 
         return data
 
+    def calculate_start_idxs(self, num_scene_frames, num_sequences):
+        if self.sequence_locations == 'free':
+            # freely select sequences across all frames (with potential overlap)
+            num_start_idxs = num_scene_frames-self.sequence_length
+            free_idxs = np.random.choice(num_start_idxs, num_sequences, replace=False)
+            return free_idxs
+        
+        elif self.sequence_locations == 'fixed':
+            # divide all frames into fixed sequences and select randomly (without overlap)
+            max_num_sequences = num_scene_frames // self.sequence_length
+            fixed_idxs = np.random.choice(max_num_sequences, num_sequences, replace=False)
+            fixed_idxs *= self.sequence_length
+            return fixed_idxs
+        
+        elif self.sequence_locations == 'evenly_spaced':
+            # select sequences evenly spaced accross all frames of the scene (without overlap)
+            if num_sequences == 1:
+                evenly_spaced_idxs = np.array([(num_scene_frames-self.sequence_length)//2])  # select middle sequence
+            else:
+                evenly_spaced_idxs = np.linspace(0, num_scene_frames-self.sequence_length, num=num_sequences).astype(int)
+            np.random.shuffle(evenly_spaced_idxs)
+            return evenly_spaced_idxs
+        
+        else:
+            raise NotImplementedError(f"sequence_locations: {self.sequence_locations}")
+
     def get_indices(self, item_idx):
-        scene_idx = item_idx // self.sequence_length
-        sequence_idx = item_idx % self.sequence_length
+        """
+        Finds the scene_idx and sequence_idx of a single 
+        item_idx (i of __getitem__) based on a list that contains 
+        the number of sequences for every scene (self.num_sequences_list)
+        """
+        cum_num_sequences_list = np.cumsum(self.num_sequences_list)
+        scene_idx = find_first_higher_index(cum_num_sequences_list, item_idx)
+        if scene_idx-1 < 0:
+            prev = 0
+        else:
+            prev = cum_num_sequences_list[scene_idx-1]
+        sequence_idx = item_idx - prev
         return scene_idx, sequence_idx
 
-    def get_frame_ids(self, info, sequence_idx):
+    def get_frame_ids(self, scene_idx, sequence_idx):
         """ Get the ids of the frames to load"""
-        
-        total_num_frames = len(info['frames'])
-        assert((self.num_sequences * self.sequence_length) <= total_num_frames,
-               "Not enough frames to select the specified number of sequences.") 
-
-        # distribute sequences evenly accross all frames of the scene-scan
-        sequence_start_idxs = np.linspace(0, total_num_frames-self.sequence_length, num=self.num_sequences)
-
+                
         # get start and end frame of the given sequence
-        low = sequence_start_idxs[sequence_idx]
+        low = self.start_idxs_list[scene_idx][sequence_idx]
         high = low + self.sequence_length
 
-        if self.frame_selection=='random':
+        if self.frame_locations=='random':
             # select num_frames random frames from the sequence (without replacement)
             sequence = torch.arange(low, high, dtype=float)
-            selected_frame_idxs = torch.multinomial(sequence, self.num_frames)
-            return sequence[selected_frame_idxs].int().tolist()
+            selected_idxs = torch.multinomial(sequence, self.num_frames)
+            return np.array(sequence[selected_idxs].int())
+        elif self.frame_locations=='evenly_spaced':
+            selected_idxs = np.linspace(low, high, num=self.num_frames).astype(int)
+            np.random.shuffle(selected_idxs)
+            return selected_idxs
         else:
-            raise NotImplementedError('frame selection %s'%self.frame_selection)
+            raise NotImplementedError(f"frame_locations: {self.frame_locations}")
 
 
 def collate_fn(data_list):

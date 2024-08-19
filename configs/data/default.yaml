@@ -8,12 +8,16 @@ num_workers_val: 15
 num_workers_test: 15
 pin_memory: False
 batch_size_train: 1  # Needs to be divisible by the number of devices (e.g., if in a distributed setup)
-num_sequences: 10  # How many sequences should be selected from one scene  # TODO support -1 -> maximum possible number of sequences (different for each scene)
+sequence_amount: 0.8  # controls the number of sequences scene-denpendently
+                      # num_sequences = sequence_amount * (num_scene_frames / sequence_length)
 sequence_length: 200  # number of raw frames to be considered as one sequence
+sequence_locations: 'free' # 'free' or 'fixed' or 'evenly_spaced'
+sequence_order: 'random'  # 'random' or 'sorted'
 num_frames_train: 20  # number of frames to select from a sequence (-1 = sequence_length)
 num_frames_val: 20
 num_frames_test: 20
-frame_selection: 'random'  # TODO: support 'evenly_spaced'
+frame_locations: 'evenly_spaced'  # 'free' or 'evenly_spaced'
+frame_order: 'random'  # 'random' or 'sorted'
 random_rotation_3d: true
 random_translation_3d: True
 pad_xy_3d: 1.

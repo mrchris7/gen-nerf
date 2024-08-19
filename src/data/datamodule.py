@@ -20,12 +20,15 @@ class ScannetDataModule(LightningDataModule):
         num_workers_test: int,
         pin_memory: bool,
         batch_size_train: int,
-        num_sequences: int,
+        sequence_amount: float,
         sequence_length: int,
+        sequence_locations: int,
+        sequence_order: str,
         num_frames_train: int,
         num_frames_val: int,
         num_frames_test: int,
-        frame_selection: str,
+        frame_locations: str,
+        frame_order: str,
         random_rotation_3d: bool,
         random_translation_3d: bool,
         pad_xy_3d: float,
@@ -83,8 +86,9 @@ class ScannetDataModule(LightningDataModule):
         transform = self.get_transform('train')
         info_files = parse_splits_list(self.hparams.datasets_train, self.hparams.data_dir)
         dataset = ScenesSequencesDataset(
-            info_files, self.hparams.num_sequences, self.hparams.sequence_length, self.hparams.num_frames_train,
-            transform, self.frame_types, self.hparams.frame_selection, self.voxel_types, self.voxel_sizes
+            info_files, self.hparams.sequence_amount, self.hparams.sequence_length, self.hparams.sequence_locations,
+            self.hparams.sequence_order, self.hparams.num_frames_train, self.hparams.frame_locations,
+            self.hparams.frame_order, transform, self.frame_types, self.voxel_types, self.voxel_sizes
         )
         dataloader = torch.utils.data.DataLoader(
             dataset, batch_size=self.batch_size_per_device, num_workers=self.hparams.num_workers_train,
@@ -100,8 +104,9 @@ class ScannetDataModule(LightningDataModule):
         transform = self.get_transform('val')
         info_files = parse_splits_list(self.hparams.datasets_val, self.hparams.data_dir)
         dataset = ScenesSequencesDataset(
-            info_files, self.hparams.num_sequences, self.hparams.sequence_length, self.hparams.num_frames_val,
-            transform, self.frame_types, self.hparams.frame_selection, self.voxel_types, self.voxel_sizes
+            info_files, self.hparams.sequence_amount, self.hparams.sequence_length, self.hparams.sequence_locations,
+            self.hparams.sequence_order, self.hparams.num_frames_val, self.hparams.frame_locations,
+            self.hparams.frame_order, transform, self.frame_types, self.voxel_types, self.voxel_sizes
         )
         dataloader = torch.utils.data.DataLoader(
             dataset, batch_size=1, num_workers=self.hparams.num_workers_val, collate_fn=collate_fn,
@@ -117,8 +122,9 @@ class ScannetDataModule(LightningDataModule):
         transform = self.get_transform('test')
         info_files = parse_splits_list(self.hparams.datasets_test, self.hparams.data_dir)
         dataset = ScenesSequencesDataset(
-            info_files, self.hparams.num_sequences, self.hparams.sequence_length, self.hparams.num_frames_test,
-            transform, self.frame_types, self.hparams.frame_selection, self.voxel_types, self.voxel_sizes
+            info_files, self.hparams.sequence_amount, self.hparams.sequence_length, self.hparams.sequence_locations,
+            self.hparams.sequence_order, self.hparams.num_frames_test, self.hparams.frame_locations,
+            self.hparams.frame_order, transform, self.frame_types, self.voxel_types, self.voxel_sizes
         )
         dataloader = torch.utils.data.DataLoader(
             dataset, batch_size=1, num_workers=self.hparams.num_workers_test, collate_fn=collate_fn,
