@@ -11,7 +11,8 @@ from src.models.components.pointnet import LocalPoolPointnet
 from src.models.components.spatial_encoder import SpatialEncoder
 from src.models.components.resnetfc import ResnetFC
 from src.models.components.heads3d import TSDFHeadSimple
-from src.models.utils import add_dicts, farthest_point_sample, get_3d_points, normalize_coordinate
+from src.models.utils import add_dicts, farthest_point_sample, get_3d_points,\
+    normalize_coordinate, sample_points_in_frustum
 from src.data.tsdf import TSDF, coordinates
 
 
@@ -362,7 +363,9 @@ class GenNerf(L.LightningModule):
     def training_step(self, batch, batch_idx):
         image = batch['image'] # (B, T, 3, H, W)
         depth = batch['depth'] # (B, T, H, W)
+        pose = batch['pose']  # (B, T, 4, 4) camera2world
         projection = batch['projection']  # (B, T, 3, 4) world2image
+        intrinsics = batch['intrinsics']  # (B, T, 3, 3)
         tsdf_vol = batch['vol_%02d_tsdf'%self.voxel_sizes[0]]  # (B, 1, 256, 256, 96)
         B, T, _, H, W = image.shape
 
@@ -373,33 +376,29 @@ class GenNerf(L.LightningModule):
         # (B, T, 3, H, W) -> (T, B, C, H, W)
         images = image.transpose(0,1)
         depths = depth.transpose(0,1)
+        poses = pose.transpose(0,1)
         projections = projection.transpose(0,1)
+        intrinsicss = intrinsics.transpose(0,1)
 
         total_loss = {}
-        for i, (image, depth, projection) in enumerate(zip(images, depths, projections)):
+        for i, (image, depth, pose, projection, intrinsics) in enumerate(zip(images, depths, poses, projections, intrinsicss)):
+            # maybe not necessary to go through all frames but only a subset?
+            
+            sampled_xyz = sample_points_in_frustum(intrinsics, pose, self.cfg.num_points, min_dist=0.5, max_dist=4.0, img_width=W, img_height=H)
+            
+            # # save to view locally
+            # debug_folder = '/home/atuin/g101ea/g101ea13/debug/frustum_sampling'
+            # xyz = get_3d_points(image, depth, projection)
+            # torch.save(xyz, f'{debug_folder}/all_points_{i}.pt')
+            # torch.save(sampled_xyz, f'{debug_folder}/sampled_points_{i}.pt')
+            # torch.save(pose, f'{debug_folder}/pose_{i}.pt')
+            # torch.save(intrinsics, f'{debug_folder}/intrinsics_{i}.pt')
+            # torch.save(image, f'{debug_folder}/image_{i}.pt')
+            # torch.save(depth, f'{debug_folder}/depth_{i}.pt')
 
-            ##########
-            ## Save depth image
-            #print("image shape", image.shape)
-            #depth_image_norm = cv2.normalize(depth[0, :, :].cpu().numpy(), None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
-            #cv2.imwrite(f'/home/atuin/g101ea/g101ea13/debug/depth_image_{i}.png', depth_image_norm)
-            #
-            ## Save color image
-            #color_image = image[0, :, :, :].cpu().numpy()
-            ## Ensure the image is in HWC format and normalize to 0-255
-            #color_image = np.transpose(color_image, (1, 2, 0))  # Convert CHW to HWC
-            #color_image = cv2.normalize(color_image, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
-            ## OpenCV expects color images in BGR format
-            #color_image_bgr = cv2.cvtColor(color_image, cv2.COLOR_RGB2BGR)
-            #cv2.imwrite(f'/home/atuin/g101ea/g101ea13/debug/color_image_{i}.png', color_image_bgr)
-            ###########
-
-            xyz = get_3d_points(image, depth, projection)
-            centroids = farthest_point_sample(xyz, self.cfg.num_points)
-            sparse_xyz = xyz[torch.arange(B)[:, None], centroids]
-            outputs = self.forward(sparse_xyz)
+            outputs = self.forward(sampled_xyz)
             targets = {}
-            targets['tsdf'] = trilinear_interpolation(tsdf_vol, sparse_xyz, self.origin, self.cfg.voxel_size)  # TODO either calculate dynamically or computed in advance
+            targets['tsdf'] = trilinear_interpolation(tsdf_vol, sampled_xyz, self.origin, self.cfg.voxel_size)
             loss = self.calculate_loss(outputs, targets)
             total_loss = add_dicts(total_loss, loss)
 

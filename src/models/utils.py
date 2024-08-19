@@ -269,6 +269,72 @@ def gen_rays(poses, width, height, focal, z_near, z_far, c=None):
     return torch.cat((cam_centers, cam_raydir, cam_nears, cam_fars), dim=-1)  # (B, H, W, 8)
 
 
+def sample_points_from_bounding_box(xyz, num_samples):
+    """
+    Calculate the bounding box of the point cloud and sample points from the volume.
+    
+    Parameters:
+        xyz (B, N, 3)
+        num_samples int
+    Returns:
+        (B, num_samples, 3)
+    """ 
+    min_bounds = np.min(xyz, axis=1, keepdims=True)  # (B, 1, 3)
+    max_bounds = np.max(xyz, axis=1, keepdims=True)  # (B, 1, 3)
+
+    # sample points uniformly within the bounding box for each point cloud
+    sampled_xyz = np.random.uniform(low=min_bounds, high=max_bounds, size=(xyz.shape[0], num_samples, 3))
+
+    return sampled_xyz
+
+
+def sample_points_in_frustum(intrinsics, pose, num_samples, min_dist, max_dist, img_width, img_height):
+    """
+    Sample points within the camera's view frustum in world coordinates for a batch of cameras.
+    
+    Parameters:
+        intrinsics (B, 3, 3): batch of camera intrinsic matrices
+        poses (B, 4, 4): batch of camera poses in world coordinates (extrinsics)
+        num_samples (int): number of points to sample for each camera
+        min_dist (float): minimum distance from the camera
+        max_dist (float): maximum distance from the camera
+        
+    Returns:
+        xyz_world (B, num_samples, 3): sampled points in world coordinates for each camera
+    """
+    B = intrinsics.shape[0]
+    device = intrinsics.device
+
+    # sample 2D points within the image rectangle for each camera
+    u = torch.rand(B, num_samples, device=device) * img_width  # x-pixel-coord
+    v = torch.rand(B, num_samples, device=device) * img_height # y-pixel-coord
+
+    # sample depth values between min_dist and max_dist for each camera
+    # pow = sqrt: sample more points in the distance (for equal distribution in frustum)
+    z = torch.pow(torch.rand(B, num_samples, device=device), 1.0/2.0) * (max_dist - min_dist) + min_dist
+
+    # convert 2D pixel coordinates to normalized image coordinates for each camera
+    u_norm = (u - intrinsics[:, 0, 2].unsqueeze(-1)) / intrinsics[:, 0, 0].unsqueeze(-1)  # (u - cx) / fx
+    v_norm = (v - intrinsics[:, 1, 2].unsqueeze(-1)) / intrinsics[:, 1, 1].unsqueeze(-1)  # (v - cy) / fy
+
+    # compute the corresponding 3D coordinates in the camera space
+    x = u_norm * z
+    y = v_norm * z
+
+    xyz_camera = torch.stack((x, y, z), dim=-1)  # (B, num_samples, 3)
+
+    # convert points to homogeneous coordinates
+    xyz_camera_hom = torch.cat((xyz_camera, torch.ones(B, num_samples, 1, device=device)), dim=-1)  # (B, num_samples, 4)
+
+    # transform points from camera coordinates to world coordinates using the pose matrix
+    xyz_world_hom = torch.bmm(pose, xyz_camera_hom.permute(0, 2, 1)).permute(0, 2, 1)  # (B, num_samples, 4)
+
+    # convert back from homogeneous coordinates to cartesian coordinates
+    xyz_world = xyz_world_hom[:, :, :3] / xyz_world_hom[:, :, 3:] # (B, num_samples, 3)
+
+    return xyz_world
+
+
 # for renderer
 def get_sphere_intersection(cam_loc, ray_directions, r = 1.0):
     # Input: n_images x 4 x 4 ; n_images x n_rays x 3
