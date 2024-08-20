@@ -48,7 +48,7 @@ echo slurm_gpus_on_node="$SLURM_GPUS_ON_NODE"
 echo ------------------------------------------
 
 # execute
-CMD="python $HOME/workspace/gennerf/gen-nerf/src/train.py logger=wandb"
+CMD="python $HOME/workspace/gennerf/gen-nerf/src/train.py experiment=train_tsdf_living logger=wandb"
 
 echo ${CMD}
 ${CMD}

@@ -2,7 +2,7 @@ type: 'GenNerf'
 
 optimizer:
   type: 'Adam'
-  lr: 0.0005  # 0.001
+  lr: 0.001
   weight_decay: 0.0
 
 scheduler:
@@ -54,7 +54,7 @@ encoder:
 
 mlp:
     d_out_sem: 64  # semantic feature
-    d_out_geo: 16  # geometric feature -> tsdf   # TODO: check what is the input dim of the tsdf-head3d
+    d_out_geo: 64  # geometric feature -> tsdf   # TODO: check what is the input dim of the tsdf-head3d
     n_blocks: 5
     d_hidden: 512
     combine_layer: 3
