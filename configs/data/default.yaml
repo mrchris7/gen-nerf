@@ -8,6 +8,7 @@ num_workers_val: 15
 num_workers_test: 15
 pin_memory: False
 batch_size_train: 1  # Needs to be divisible by the number of devices (e.g., if in a distributed setup)
+dataset_type: 'sequences'  # 'sequences' or 'frame'
 sequence_amount: 0.8  # controls the number of sequences scene-denpendently
                       # num_sequences = sequence_amount * (num_scene_frames / sequence_length)
 sequence_length: 200  # number of raw frames to be considered as one sequence

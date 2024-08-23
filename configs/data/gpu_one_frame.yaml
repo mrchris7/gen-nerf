@@ -1,0 +1,12 @@
+defaults:
+  - gpu
+
+datasets_train: ['/scans/scene0000_00/info.json']
+datasets_val: ['/scans/scene0000_00/info.json']
+datasets_test: ['/scans/scene0000_00/info.json']
+dataset_type: 'frame'
+frame_idx: 0
+length_train: 75
+length_val: 20
+length_test: 5
+scene_idx: 0

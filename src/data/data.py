@@ -563,3 +563,56 @@ def parse_splits_list(splits, data_dir=None):
     return info_files
 
 
+
+class FrameDataset(torch.utils.data.Dataset):
+    """ Pytorch Dataset for a single frame in a scene
+    
+    getitem loads the same frame of a scene
+    along with the corresponding TSDF for the scene
+    """
+
+    def __init__(self, info_files, frame_idx, length, scene_idx=0, transform=None,
+                 frame_types=[], voxel_types=[], voxel_sizes=[]):
+        """
+        Args:
+            info_files: list of info_json files
+            fram_idx: index of frame in the scene to load
+            length: length of dataset
+            scene_idx: the index of the scene in info-files to load
+            transform: apply preprocessing transform to images and TSDF
+            frame_types: which images to load (ex: depth, semseg, etc)
+            frame_selection: how to choose the frames in the sequence
+            voxel_types: list of voxel attributes to load with the TSDF
+            voxel_sizes: list of voxel sizes to load
+        """
+
+        self.info_files = info_files
+        self.frame_idx = frame_idx
+        self.length = length
+        self.scene_idx = scene_idx
+        self.transform = transform
+        self.frame_types = frame_types
+        self.voxel_types = voxel_types
+        self.voxel_sizes = voxel_sizes
+        self.info = load_info_json(self.info_files[scene_idx])
+
+    def __len__(self):
+        return self.length
+
+    def __getitem__(self, i):
+        """ Load the same frame (image and TSDF) the i-th time"""
+        frames = [map_frame(self.info['frames'][self.frame_idx], self.frame_types)]
+
+        data = {'dataset': self.info['dataset'],
+                'scene': self.info['scene'],
+                #'instances': info['instances'],
+                'frames': frames}
+
+        # load tsdf volumes
+        data = map_tsdf(self.info, data, self.voxel_types, self.voxel_sizes)
+
+        # apply transforms
+        if self.transform is not None:
+            data = self.transform(data)
+
+        return data
