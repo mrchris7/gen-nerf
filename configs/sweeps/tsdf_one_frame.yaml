@@ -1,0 +1,35 @@
+# docs: https://docs.wandb.ai/guides/sweeps/define-sweep-configuration
+
+program: /home/hpc/g101ea/g101ea13/workspace/gennerf/gen-nerf/src/train.py
+method: random
+metric:
+  goal: "minimize"
+  name: "val_loss_tsdf"
+parameters:
+  model.optimizer.lr:
+    values: [0.001, 0.0001]
+  model.encoder.spatial.backbone:
+    values: ['resnet18', 'resnet34']
+  model.encoder.spatial.num_layers:
+    values: [2, 3]
+  model.encoder.pointnet.n_blocks:
+    values: [3, 5]
+  model.encoder.pointnet.unet_kwargs.depth:
+    values: [3, 5]
+  model.mlp.n_blocks:
+    values: [3, 5]
+  
+#early_terminate:
+#  type: hyperband
+#  s: 0
+#  eta: 0
+#  max_iter: 0
+command:
+- ${env}
+- ${interpreter}
+- ${program}
+- experiment=train_tsdf_one_frame
+- logger=wandb
+- test=False
+- logger.wandb.job_type=sweep
+- ${args_no_hyphens}

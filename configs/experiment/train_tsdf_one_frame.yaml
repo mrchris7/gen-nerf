@@ -1,10 +1,10 @@
 # @package _global_
 
 # to execute this experiment run:
-# python train.py experiment=train_tsdf_living
+# python train.py experiment=train_tsdf_one_frame
 
 defaults:
-  - override /data: gpu_living
+  - override /data: gpu_one_frame
   - override /model: gen_nerf
   - override /callbacks: default
   - override /logger: null
@@ -14,7 +14,7 @@ defaults:
 # all parameters below will be merged with parameters from default configurations set above
 # this allows you to overwrite only specified parameters
 
-tags: ['dev', 'cluster', 'living_room', 'only_tsdf']
+tags: ['dev', 'cluster', 'one_frame', 'only_tsdf']
 
 seed: 0
 
@@ -35,20 +35,18 @@ model:
 
 data:
   batch_size_train: 1  # Needs to be divisible by the number of devices
-  sequence_amount: 0.8
-  sequence_length: 200
-  sequence_locations: 'free' # 'free' or 'fixed' or 'evenly_spaced'
-  num_frames_train: 20
-  num_frames_val: 20
-  num_frames_test: 20
-  frame_locations: 'evenly_spaced'  # 'free' or 'evenly_spaced'
+  frame_idx: 0
+  length_train: 75
+  length_val: 20
+  length_test: 5
+  scene_idx: 0
   voxel_size: .04
   voxel_dim_train: [160, 160, 64]
-  voxel_dim_val: [256, 256, 96]
-  voxel_dim_test: [416, 416, 128]
+  voxel_dim_val: [160, 160, 64]  # [256, 256, 96]
+  voxel_dim_test: [160, 160, 64]  # [416, 416, 128]
 
 logger:
   wandb:
-    #name: "train_tsdf_living"
+    #name: "train_tsdf_one_frame"
     job_type: "train" # train / eval / test / experimental / sweep
     tags: ${tags}
