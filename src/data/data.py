@@ -374,11 +374,18 @@ class ScenesSequencesDataset(torch.utils.data.Dataset):
         
         start_idxs_list = []
         num_sequences_list = []
-        for info_file in self.info_files:
+        delete_scenes_idxs = []
+        for i, info_file in enumerate(self.info_files):
             # calculate num sequences for each scene
             info = load_info_json(info_file)
             num_scene_frames = len(info['frames'])
             num_sequences = int(self.sequence_amount * (num_scene_frames / self.sequence_length))
+
+            if num_scene_frames < self.sequence_length:
+                # exclude scenes that have not enough frames
+                delete_scenes_idxs.append(i)
+                continue
+            
             num_sequences_list.append(num_sequences)
 
             # calculate start indices for each sequence of each scene
@@ -392,6 +399,12 @@ class ScenesSequencesDataset(torch.utils.data.Dataset):
                 raise NotImplementedError(f"sequence_order: {self.sequence_order}")
 
             start_idxs_list.append(start_idxs)
+
+        # exclude scenes that have not enough frames
+        for i in sorted(delete_scenes_idxs, reverse=True):
+            info = load_info_json(self.info_files[i])
+            print(f"exclude scene {i} ({info['scene']})")
+            del self.info_files[i]
 
         self.num_sequences_list = num_sequences_list
         self.start_idxs_list = start_idxs_list
@@ -416,7 +429,7 @@ class ScenesSequencesDataset(torch.utils.data.Dataset):
 
         #print("frame_ids", frame_ids)
         frames = map_frames(info['frames'], frame_ids, self.frame_types)
-        
+
         data = {'dataset': info['dataset'],
                 'scene': info['scene'],
                 #'instances': info['instances'],

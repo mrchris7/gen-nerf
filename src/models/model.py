@@ -361,57 +361,35 @@ class GenNerf(L.LightningModule):
     # used when testing only GenNerf model
 
     def training_step(self, batch, batch_idx):
-        image = batch['image'] # (B, T, 3, H, W)
-        depth = batch['depth'] # (B, T, H, W)
-        pose = batch['pose']  # (B, T, 4, 4) camera2world
-        projection = batch['projection']  # (B, T, 3, 4) world2image
-        intrinsics = batch['intrinsics']  # (B, T, 3, 3)
-        tsdf_vol = batch['vol_%02d_tsdf'%self.voxel_sizes[0]]  # (B, 1, 256, 256, 96)
-        B, T, _, H, W = image.shape
+        
+        total_loss = self.process_step(batch)
 
-        self.initialize_volume()
-        self.encode(projection, image, depth)  # encode images of whole sequence at once
+        B = batch['image'].shape[0]
+        self.log('train_loss_tsdf', total_loss['tsdf'], batch_size=B, sync_dist=True)
 
-        # transpose batch and time so we can go through sequentially
-        # (B, T, 3, H, W) -> (T, B, C, H, W)
-        images = image.transpose(0,1)
-        depths = depth.transpose(0,1)
-        poses = pose.transpose(0,1)
-        projections = projection.transpose(0,1)
-        intrinsicss = intrinsics.transpose(0,1)
-
-        total_loss = {}
-        for i, (image, depth, pose, projection, intrinsics) in enumerate(zip(images, depths, poses, projections, intrinsicss)):
-            # maybe not necessary to go through all frames but only a subset?
-            
-            sampled_xyz = sample_points_in_frustum(intrinsics, pose, self.cfg.num_points, min_dist=0.5, max_dist=4.0, img_width=W, img_height=H)
-            
-            # # save to view locally
-            # debug_folder = '/home/atuin/g101ea/g101ea13/debug/frustum_sampling'
-            # xyz = get_3d_points(image, depth, projection)
-            # torch.save(xyz, f'{debug_folder}/all_points_{i}.pt')
-            # torch.save(sampled_xyz, f'{debug_folder}/sampled_points_{i}.pt')
-            # torch.save(pose, f'{debug_folder}/pose_{i}.pt')
-            # torch.save(intrinsics, f'{debug_folder}/intrinsics_{i}.pt')
-            # torch.save(image, f'{debug_folder}/image_{i}.pt')
-            # torch.save(depth, f'{debug_folder}/depth_{i}.pt')
-
-            outputs = self.forward(sampled_xyz)
-            targets = {}
-            targets['tsdf'] = trilinear_interpolation(tsdf_vol, sampled_xyz, self.origin, self.cfg.voxel_size)
-            loss = self.calculate_loss(outputs, targets)
-            total_loss = add_dicts(total_loss, loss)
-
-        self.log('loss_tsdf', total_loss['tsdf'], batch_size=B, sync_dist=True)
-        #self.log('loss', total_loss['combined'], batch_size=B, sync_dist=True)
+        # log lr
+        #lr = self.lr_schedulers().optimizer.param_groups[0]['lr']
+        #self.log('lr', lr, batch_size=B, sync_dist=True)
+        
+        #self.log('train_loss', total_loss['combined'], batch_size=B, sync_dist=True)
         return total_loss['combined']
     
 
     def validation_step(self, batch, batch_idx):
-        return self.training_step(batch, batch_idx)
+        total_loss = self.process_step(batch)
+
+        B = batch['image'].shape[0]
+        self.log('val_loss_tsdf', total_loss['tsdf'], batch_size=B, sync_dist=True)
+        #self.log('val_loss', total_loss['combined'], batch_size=B, sync_dist=True)
+        return total_loss['combined']
 
     def test_step(self, batch, batch_idx):
-        return self.training_step(batch, batch_idx)
+        total_loss = self.process_step(batch)
+
+        B = batch['image'].shape[0]
+        self.log('test_loss_tsdf', total_loss['tsdf'], batch_size=B, sync_dist=True)
+        #self.log('test_loss', total_loss['combined'], batch_size=B, sync_dist=True)
+        return total_loss['combined']
 
     def configure_optimizers(self):
         optimizers = []
@@ -457,3 +435,46 @@ class GenNerf(L.LightningModule):
                 f'scheduler {self.cfg.scheduler.type} not supported')
                 
         return optimizers, schedulers
+
+    def process_step(self, batch):
+        image = batch['image'] # (B, T, 3, H, W)
+        depth = batch['depth'] # (B, T, H, W)
+        pose = batch['pose']  # (B, T, 4, 4) camera2world
+        projection = batch['projection']  # (B, T, 3, 4) world2image
+        intrinsics = batch['intrinsics']  # (B, T, 3, 3)
+        tsdf_vol = batch['vol_%02d_tsdf'%self.voxel_sizes[0]]  # (B, 1, 256, 256, 96)
+        B, T, _, H, W = image.shape
+
+        self.initialize_volume()
+        self.encode(projection, image, depth)  # encode images of whole sequence at once
+
+        # transpose batch and time so we can go through sequentially
+        # (B, T, 3, H, W) -> (T, B, C, H, W)
+        images = image.transpose(0,1)
+        depths = depth.transpose(0,1)
+        poses = pose.transpose(0,1)
+        projections = projection.transpose(0,1)
+        intrinsicss = intrinsics.transpose(0,1)
+
+        total_loss = {}
+        for i, (image, depth, pose, projection, intrinsics) in enumerate(zip(images, depths, poses, projections, intrinsicss)):
+            # maybe not necessary to go through all frames but only a subset?
+            
+            sampled_xyz = sample_points_in_frustum(intrinsics, pose, self.cfg.num_points, min_dist=0.5, max_dist=4.0, img_width=W, img_height=H)
+            
+            # # save to view locally
+            # debug_folder = '/home/atuin/g101ea/g101ea13/debug/frustum_sampling'
+            # xyz = get_3d_points(image, depth, projection)
+            # torch.save(xyz, f'{debug_folder}/all_points_{i}.pt')
+            # torch.save(sampled_xyz, f'{debug_folder}/sampled_points_{i}.pt')
+            # torch.save(pose, f'{debug_folder}/pose_{i}.pt')
+            # torch.save(intrinsics, f'{debug_folder}/intrinsics_{i}.pt')
+            # torch.save(image, f'{debug_folder}/image_{i}.pt')
+            # torch.save(depth, f'{debug_folder}/depth_{i}.pt')
+
+            outputs = self.forward(sampled_xyz)
+            targets = {}
+            targets['tsdf'] = trilinear_interpolation(tsdf_vol, sampled_xyz, self.origin, self.cfg.voxel_size)
+            loss = self.calculate_loss(outputs, targets)
+            total_loss = add_dicts(total_loss, loss)
+        return total_loss
