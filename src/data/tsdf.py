@@ -36,7 +36,7 @@ def coordinates(voxel_dim, device=torch.device('cuda')):
     x = torch.arange(nx, dtype=torch.long, device=device)
     y = torch.arange(ny, dtype=torch.long, device=device)
     z = torch.arange(nz, dtype=torch.long, device=device)
-    x, y, z = torch.meshgrid(x, y, z)
+    x, y, z = torch.meshgrid(x, y, z, indexing='ij')
     return torch.stack((x.flatten(), y.flatten(), z.flatten()))
 
 
@@ -56,7 +56,8 @@ def depth_to_world(projection, depth):
 
     # pixel grid
     py, px = torch.meshgrid(torch.arange(depth.size(-2)).type_as(depth),
-                            torch.arange(depth.size(-1)).type_as(depth))
+                            torch.arange(depth.size(-1)).type_as(depth),
+                            indexing='ij')
     pz = torch.ones_like(px)
     p = torch.cat((px.unsqueeze(0), py.unsqueeze(0), pz.unsqueeze(0), 
                    1/depth.unsqueeze(0)))

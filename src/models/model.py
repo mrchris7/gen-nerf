@@ -1,18 +1,20 @@
 # Adapted from: https://github.com/magicleap/Atlas/blob/master/atlas/model.py
 
 import itertools
-import cv2
+import os
 import numpy as np
-import open3d as o3d
 import torch
 import torch.nn.functional as F
 import lightning as L
+import wandb
+import tempfile
+from scipy.interpolate import RegularGridInterpolator
 from src.models.components.pointnet import LocalPoolPointnet
 from src.models.components.spatial_encoder import SpatialEncoder
 from src.models.components.resnetfc import ResnetFC
 from src.models.components.heads3d import TSDFHeadSimple
 from src.models.utils import add_dicts, farthest_point_sample, get_3d_points,\
-    normalize_coordinate, sample_points_in_frustum
+    normalize_coordinate, sample_points_in_frustum, log_transform
 from src.data.tsdf import TSDF, coordinates
 
 
@@ -26,7 +28,7 @@ def backproject(voxel_dim, voxel_size, origin, projection, features):
     Args:
         voxel_dim: size of voxel volume to construct (nx, ny, nz)
         voxel_size: metric size of each voxel (ex: .04m)
-        origin: origin of the voxel volume (xyz position of voxel (0,0,0))
+        origin (1, 3): origin of the voxel volume (xyz position of voxel (0,0,0))
         projection (B, 4, 3): projection matrices (intrinsics@extrinsics)
         features (B, C, H, W): 2d feature tensor to be backprojected into 3d
 
@@ -65,13 +67,13 @@ def backproject(voxel_dim, voxel_size, origin, projection, features):
 
     return volume, valid
 
-
+# TODO: find an alternative with gpu-support
 def trilinear_interpolation(voxel_volume, xyz, origin, voxel_size):
     """
     Perform trilinear interpolation to map 3D world points to features in the voxel volume.
     
     Args:
-        voxel_volume (B, C, nx, ny, nz): voxel volume
+        voxel_volume (B, nx, ny, nz, C): voxel volume
         xyz (B, N, 3): 3D world points
         origin (3,): world coordinates of voxel (0, 0, 0)
         voxel_size: size of each voxel
@@ -79,19 +81,22 @@ def trilinear_interpolation(voxel_volume, xyz, origin, voxel_size):
     Returns:
         features (B, N, C): interpolated features
     """
-    B, C, nx, ny, nz = voxel_volume.shape
-    B, N, _ = xyz.shape
-    device = xyz.device
-
-    # normalize points to voxel grid coords and scale points to voxel grid dim
-    xyz_normalized = (xyz - origin.to(device).view(1, 1, 3)) / voxel_size
-    scaled_xyz = 2 * (xyz_normalized / torch.tensor([nx-1, ny-1, nz-1], device=xyz.device)) - 1
-
-    # reshape (B, N, 1, 1, 3) to (B, 1, N, 1, 3)
-    scaled_xyz = scaled_xyz.view(B, N, 1, 1, 3).permute(0, 3, 1, 2, 4)
+    device = voxel_volume.device
+    B, nx, ny, nz, C = voxel_volume.shape
+    N = xyz.shape[1]
     
-    features = F.grid_sample(voxel_volume, scaled_xyz, align_corners=True)
-    features = features.view(B, C, N).permute(0, 2, 1) # reshape to (B, N, C)
+    x = torch.linspace(0.0, nx*voxel_size, nx) + origin[0]
+    y = torch.linspace(0.0, ny*voxel_size, ny) + origin[1]
+    z = torch.linspace(0.0, nz*voxel_size, nz) + origin[2]
+    points = (x, y, z) # x=(nx,) y=(ny,) z=(nz,)
+
+    features = torch.empty(B, N, C, device=device)
+    for batch in range(B):
+
+        interpolator = RegularGridInterpolator(points, voxel_volume[batch].detach().cpu(),
+                                               bounds_error=False, fill_value=None) # extrapolate outside bounds
+        interpolated_features = interpolator(xyz[batch].detach().cpu())
+        features[batch] = torch.from_numpy(interpolated_features).to(device)
     
     return features
 
@@ -192,6 +197,7 @@ class GenNerf(L.LightningModule):
                 voxel_dim = self.cfg.voxel_dim_train
             else:
                 voxel_dim = self.cfg.voxel_dim_val
+            feat_2d = F.interpolate(feat_2d, scale_factor=2, mode='bilinear', align_corners=False)
             volume, valid = backproject(voxel_dim, self.cfg.voxel_size, self.origin, projection, feat_2d)
             self.volume = self.volume + volume
             self.valid = self.valid + valid
@@ -264,7 +270,8 @@ class GenNerf(L.LightningModule):
             volume[:,self.valid.squeeze(1)==0]=0
             volume = volume.transpose(0,1)
 
-            feat_spatial = trilinear_interpolation(volume, xyz, self.origin, self.cfg.voxel_size)
+            volume_ = volume.permute(0, 2, 3, 4, 1)
+            feat_spatial = trilinear_interpolation(volume_, xyz, self.origin.squeeze(), self.cfg.voxel_size)
             feat = torch.cat((feat, feat_spatial), dim=-1)
         return feat
 
@@ -281,6 +288,7 @@ class GenNerf(L.LightningModule):
             output (dict): outputs-dict from head_geo
                            'feat_geo': (B, N, d_out_geo)
                            'feat_sem': (B, N, d_out_sem)
+                           'tsdf': (B, N, 1)
         """
         B, N, _ = xyz.size()
         d_out_geo = self.cfg.mlp.d_out_geo
@@ -304,45 +312,48 @@ class GenNerf(L.LightningModule):
 
         return outputs
     
-    '''
-    def postprocess(self, outputs):
+    def postprocess(self, tsdf_vol):
         """ Wraps the network output into a TSDF data structure
         
         Args:
-            batch: dict containg network inputs and targets
+            tsdf_vol: tsdf volume (B, nx, ny, nz)
 
         Returns:
-            list of TSDFs (one TSDF per scene in the batch)
+            list of TSDFs (one TSDF per scene in the batch) (length == batchsize)
         """
-        key = 'vol_%02d'%self.voxel_sizes[0] # only get vol of final resolution
         tsdf_data = []
-        batch_size = len(outputs[key+'_tsdf'])
+        batch_size = len(tsdf_vol)
 
         for i in range(batch_size):
-            tsdf = TSDF(self.voxel_size, 
-                        self.origin,
-                        outputs[key+'_tsdf'][i].squeeze(0))
-            
-            ## add semseg vol
-            #if ('semseg' in self.voxel_types) and (key+'_semseg' in outputs):
-            #    semseg = outputs[key+'_semseg'][i]
-            #    if semseg.ndim==4:
-            #        semseg = semseg.argmax(0)
-            #    tsdf.attribute_vols['semseg'] = semseg
-            #
-            ## add color vol
-            #if 'color' in self.voxel_types:
-            #    color = outputs[key+'_color'][i]
-            #    tsdf.attribute_vols['color'] = color
-            #
+            tsdf = TSDF(self.cfg.voxel_size, self.origin, tsdf_vol[i].squeeze(0))
             tsdf_data.append(tsdf)
 
         return tsdf_data
-    '''
 
     def loss_tsdf(self, outputs, targets):
-        mse_loss = torch.nn.MSELoss()
-        loss = mse_loss(outputs['tsdf'], targets['tsdf'])
+        #mse_loss = torch.nn.MSELoss()
+        #loss = mse_loss(outputs['tsdf'], targets['tsdf'])
+        
+        # TODO: make configs
+        log_transform_loss = True
+        log_transform_loss_shift = 1.0
+        loss_weight = 1.0
+
+        pred = outputs['tsdf'] # [B, N, 1]
+        trgt = targets['tsdf'] # [B, N, 1]
+        
+        mask_observed = trgt<1
+        mask_outside  = (trgt==1).all(-1, keepdim=True)
+        
+        if log_transform_loss:
+            pred = log_transform(pred, log_transform_loss_shift)
+            trgt = log_transform(trgt, log_transform_loss_shift)
+
+        loss = F.l1_loss(pred, trgt, reduction='none') * loss_weight
+
+        loss = loss[mask_observed | mask_outside].mean()
+        #loss = loss.mean()
+        
         return loss
 
     def calculate_loss(self, outputs, targets):
@@ -361,9 +372,12 @@ class GenNerf(L.LightningModule):
     # used when testing only GenNerf model
 
     def training_step(self, batch, batch_idx):
-        
-        total_loss = self.process_step(batch)
+        # required if "FrameDataset" is used!
+        if batch_idx == 0:
+            L.seed_everything(0, workers=True)
+            #print("train rand:", np.random.random(1))
 
+        total_loss = self.process_step(batch, 'train')
         B = batch['image'].shape[0]
         self.log('train_loss_tsdf', total_loss['tsdf'], batch_size=B, sync_dist=True)
 
@@ -376,7 +390,12 @@ class GenNerf(L.LightningModule):
     
 
     def validation_step(self, batch, batch_idx):
-        total_loss = self.process_step(batch)
+        # required if "FrameDataset" is used!
+        if batch_idx == 0:
+            L.seed_everything(1, workers=True)
+            #print("val rand:", np.random.random(1))
+
+        total_loss = self.process_step(batch, 'val')
 
         B = batch['image'].shape[0]
         self.log('val_loss_tsdf', total_loss['tsdf'], batch_size=B, sync_dist=True)
@@ -384,12 +403,74 @@ class GenNerf(L.LightningModule):
         return total_loss['combined']
 
     def test_step(self, batch, batch_idx):
-        total_loss = self.process_step(batch)
+        total_loss = self.process_step(batch, 'test')
 
         B = batch['image'].shape[0]
+        device = batch['image'].device
         self.log('test_loss_tsdf', total_loss['tsdf'], batch_size=B, sync_dist=True)
         #self.log('test_loss', total_loss['combined'], batch_size=B, sync_dist=True)
+
+        # log mesh of predicted and target tsdf values:
+
+        # get target tsdf
+        tsdf_trgt = batch['vol_%02d_tsdf'%self.voxel_sizes[0]]  # (B, 1, nx, ny, nz)
+        tsdf_trgt = tsdf_trgt.squeeze(1)  # (B, nx, ny, nz)
+        print("tsdf_trgt:", tsdf_trgt.shape)
+
+        # get predicted tsdf
+        _, nx, ny, nz = tsdf_trgt.shape
+        volume_size = self.cfg.voxel_size*self.cfg.voxel_dim_test
+        print("vol-dims:", nx, ny, nz)
+        print("vol-size:", volume_size)
+        x = torch.linspace(0, volume_size[0], nx, device=device)
+        y = torch.linspace(0, volume_size[1], ny, device=device)
+        z = torch.linspace(0, volume_size[2], nz, device=device)
+        grid_x, grid_y, grid_z = torch.meshgrid(x, y, z, indexing='ij')
+
+        # stack the grid coordinates and reshape to match input shape (B, N, 3)
+        grid_xyz = torch.stack([grid_x, grid_y, grid_z], dim=-1)  # (nx, ny, nz, 3)
+        
+        grid_xyz = grid_xyz.reshape(-1, 3)  # flatten to (N, 3)
+        grid_xyz = grid_xyz.unsqueeze(0)  # (B=1, N, 3)
+        # optionally repeat for every batch (-> not necessary)
+        #grid_points = grid_points.repeat(B, 1, 1)  # (B, N, 3)
+        
+        # debugging:
+        debug_folder = '/home/atuin/g101ea/g101ea13/debug/test_mesh'
+        torch.save(grid_xyz, f'{debug_folder}/grid_points.pt')
+
+        outputs = self.forward(grid_xyz)
+        tsdf_pred = outputs['tsdf']  # (B, N, 1)
+        tsdf_pred = tsdf_pred.reshape(B, nx, ny, nz)  # (B, nx, ny, nz)
+
+        debug_folder = '/home/atuin/g101ea/g101ea13/debug/test_tsdf'
+        torch.save(tsdf_pred, f'{debug_folder}/test_pred_tsdf.pt')
+        torch.save(tsdf_trgt, f'{debug_folder}/test_trgt_tsdf.pt')
+        
+        pred_tsdfs = self.postprocess(tsdf_pred)
+        trgt_tsdfs = self.postprocess(tsdf_trgt)
+
+        pred_mesh = pred_tsdfs[0].get_mesh()
+        trgt_mesh = trgt_tsdfs[0].get_mesh()
+
+        # Log image
+        #image = batch['image'][0, 0, :, :, :].cpu().numpy()
+        #image = np.transpose(image, (1, 2, 0))  # convert CHW to HWC
+        #wandb.log({"test_image": wandb.Image(image)})
+
+        # Log the meshes to wandb
+        self.log_mesh_to_wandb(pred_mesh, "test_pred_mesh")
+        self.log_mesh_to_wandb(trgt_mesh, "test_trgt_mesh")
+
         return total_loss['combined']
+
+    def log_mesh_to_wandb(self, mesh, name):
+        # create a temporary file to store the mesh
+        with tempfile.NamedTemporaryFile(suffix=".obj") as tmpfile:
+            mesh.export(tmpfile.name, file_type='obj')
+            debug_folder = '/home/atuin/g101ea/g101ea13/debug/test_mesh'
+            mesh.export(os.path.join(debug_folder, f"{name}.obj"))
+            wandb.log({name: wandb.Object3D(tmpfile.name)})
 
     def configure_optimizers(self):
         optimizers = []
@@ -398,9 +479,10 @@ class GenNerf(L.LightningModule):
         # allow for different learning rates between pretrained layers 
         # (resnet backbone) and new layers (everything else).
         ###params_backbone2d = self.backbone2d[0].parameters()
-        modules = [self.mlp,
-                   self.head_geo,
-                  ]
+        modules = [
+            self.mlp,
+            self.head_geo
+        ]
         if self.cfg.encoder.use_spatial:
             modules.append(self.spatial)
         if self.cfg.encoder.use_pointnet:
@@ -436,13 +518,14 @@ class GenNerf(L.LightningModule):
                 
         return optimizers, schedulers
 
-    def process_step(self, batch):
+    def process_step(self, batch, mode):
         image = batch['image'] # (B, T, 3, H, W)
         depth = batch['depth'] # (B, T, H, W)
         pose = batch['pose']  # (B, T, 4, 4) camera2world
         projection = batch['projection']  # (B, T, 3, 4) world2image
         intrinsics = batch['intrinsics']  # (B, T, 3, 3)
-        tsdf_vol = batch['vol_%02d_tsdf'%self.voxel_sizes[0]]  # (B, 1, 256, 256, 96)
+        tsdf_vol = batch['vol_%02d_tsdf'%self.voxel_sizes[0]]  # (B, 1, nx, ny, nz)
+        # nx, ny, nz depend on current config (transformed from loaded ground-truth)
         B, T, _, H, W = image.shape
 
         self.initialize_volume()
@@ -458,23 +541,23 @@ class GenNerf(L.LightningModule):
 
         total_loss = {}
         for i, (image, depth, pose, projection, intrinsics) in enumerate(zip(images, depths, poses, projections, intrinsicss)):
-            # maybe not necessary to go through all frames but only a subset?
-            
+            # maybe not necessary to go through all frames but only a subset?            
             sampled_xyz = sample_points_in_frustum(intrinsics, pose, self.cfg.num_points, min_dist=0.5, max_dist=4.0, img_width=W, img_height=H)
-            
-            # # save to view locally
-            # debug_folder = '/home/atuin/g101ea/g101ea13/debug/frustum_sampling'
-            # xyz = get_3d_points(image, depth, projection)
-            # torch.save(xyz, f'{debug_folder}/all_points_{i}.pt')
-            # torch.save(sampled_xyz, f'{debug_folder}/sampled_points_{i}.pt')
-            # torch.save(pose, f'{debug_folder}/pose_{i}.pt')
-            # torch.save(intrinsics, f'{debug_folder}/intrinsics_{i}.pt')
-            # torch.save(image, f'{debug_folder}/image_{i}.pt')
-            # torch.save(depth, f'{debug_folder}/depth_{i}.pt')
+
+            if mode=='test':
+                # save to view locally
+                debug_folder = '/home/atuin/g101ea/g101ea13/debug/frustum_sampling'
+                xyz = get_3d_points(image, depth, projection)
+                torch.save(xyz, f'{debug_folder}/all_points_{i}.pt')
+                torch.save(sampled_xyz, f'{debug_folder}/sampled_points_{i}.pt')
+                torch.save(pose, f'{debug_folder}/pose_{i}.pt')
+                torch.save(intrinsics, f'{debug_folder}/intrinsics_{i}.pt')
+                torch.save(image, f'{debug_folder}/image_{i}.pt')
+                torch.save(depth, f'{debug_folder}/depth_{i}.pt')
 
             outputs = self.forward(sampled_xyz)
             targets = {}
-            targets['tsdf'] = trilinear_interpolation(tsdf_vol, sampled_xyz, self.origin, self.cfg.voxel_size)
+            targets['tsdf'] = trilinear_interpolation(tsdf_vol.permute(0, 2, 3, 4, 1), sampled_xyz, self.origin.squeeze(), self.cfg.voxel_size)
             loss = self.calculate_loss(outputs, targets)
             total_loss = add_dicts(total_loss, loss)
         return total_loss

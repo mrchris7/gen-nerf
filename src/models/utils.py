@@ -543,7 +543,7 @@ def arange_pixels(resolution=(128, 128), batch_size=1, image_range=(-1., 1.),
     n_points = resolution[0] * resolution[1]
 
     # Arrange pixel location in scale resolution
-    pixel_locations = torch.meshgrid(torch.arange(0, w), torch.arange(0, h))
+    pixel_locations = torch.meshgrid(torch.arange(0, w), torch.arange(0, h), indexing='ij')
     pixel_locations = torch.stack(
         [pixel_locations[0], pixel_locations[1]],
         dim=-1).long().view(1, -1, 2).repeat(batch_size, 1, 1)
