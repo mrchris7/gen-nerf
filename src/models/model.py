@@ -3,6 +3,8 @@
 import itertools
 import os
 import numpy as np
+from sklearn.neighbors import NearestNeighbors
+from src.models.components.positional_encoding import PositionalEncoding
 import torch
 import torch.nn.functional as F
 import lightning as L
@@ -121,7 +123,12 @@ class GenNerf(L.LightningModule):
             encoder_latent += 0 # self.cfg.f_teacher.feature_dim
         
         # decoders
-        self.mlp = ResnetFC.from_conf(cfg.mlp, d_in=3, d_latent=encoder_latent)
+        d_in = 3  # xyz
+        if cfg.use_code:
+            self.code = PositionalEncoding.from_conf(cfg.code, d_in=d_in)
+            d_in = self.code.d_out
+
+        self.mlp = ResnetFC.from_conf(cfg.mlp, d_in=d_in, d_latent=encoder_latent)
         #self.head_geo = TSDFHead(cfg.head_geo, cfg.backbone3d.channels, cfg.voxel_size)  # # simpler head required that regresses tsdf-value from feature of point (instead of feature of whole volume)
         self.head_geo = TSDFHeadSimple(cfg.mlp.d_out_geo)
         
@@ -295,6 +302,13 @@ class GenNerf(L.LightningModule):
         d_out_sem = self.cfg.mlp.d_out_sem
         
         feat = self.map_features(xyz)  # [B, N, d_latent=encoder_latent]
+        
+        if self.cfg.use_code:
+            B, N, _ = xyz.shape
+            xyz = xyz.reshape(-1, 3)  # (B*N, 3)
+            xyz = self.code(xyz)
+            xyz = xyz.reshape(B, N, -1)
+
         mlp_input = torch.cat((feat, xyz), dim=-1)
 
         mlp_output = self.mlp(mlp_input)

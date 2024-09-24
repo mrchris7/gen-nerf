@@ -61,10 +61,12 @@ mlp:
     combine_type: average
     beta: 0.0
     use_spade: False
-  #code:  # positional encoding
-  #  num_freqs: 6
-  #  freq_factor: 1.5
-  #  include_input: True
+
+use_code: True # positional encoding
+code:
+  num_freqs: 6 # also good 2 with freqfactor=1.5 
+  freq_factor: 0.5 # 1.5
+  include_input: True
  
 #backbone3d:
 #  channels: [32, 64, 128, 256]
