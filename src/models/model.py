@@ -345,38 +345,129 @@ class GenNerf(L.LightningModule):
         return tsdf_data
 
     def loss_tsdf(self, outputs, targets):
-        #mse_loss = torch.nn.MSELoss()
-        #loss = mse_loss(outputs['tsdf'], targets['tsdf'])
+        pred = outputs['tsdf']  # [B, N, 1]
+        trgt = targets['tsdf']  # [B, N, 1]
         
-        # TODO: make configs
-        log_transform_loss = True
-        log_transform_loss_shift = 1.0
-        loss_weight = 1.0
-
-        pred = outputs['tsdf'] # [B, N, 1]
-        trgt = targets['tsdf'] # [B, N, 1]
+        mask_observed = trgt < 1
+        mask_outside  = (trgt == 1).all(-1, keepdim=True)
         
-        mask_observed = trgt<1
-        mask_outside  = (trgt==1).all(-1, keepdim=True)
-        
-        if log_transform_loss:
-            pred = log_transform(pred, log_transform_loss_shift)
-            trgt = log_transform(trgt, log_transform_loss_shift)
+        if self.cfg.tsdf_loss.log_transform: # breaks gradient for eikonal loss calculation
+            pred = log_transform(pred, self.cfg.tsdf_loss.log_transform_shift)
+            trgt = log_transform(trgt, self.cfg.tsdf_loss.log_transform_shift)
 
-        loss = F.l1_loss(pred, trgt, reduction='none') * loss_weight
-
+        loss = F.l1_loss(pred, trgt, reduction='none') * self.cfg.tsdf_loss.weight
         loss = loss[mask_observed | mask_outside].mean()
-        #loss = loss.mean()
+        return loss
+
+    '''
+    def loss_smooth(self, outputs, targets):
+        pred = outputs['tsdf']  # [B, N, 1]
+        sampled_xyz = targets['sampled_xyz']
         
+        device = pred.device
+        B, N, _ = pred.shape
+        loss = 0.0
+        for b in range(B):
+            p = sampled_xyz[b].detach().cpu().numpy()
+            nbrs = NearestNeighbors(n_neighbors=self.cfg.tsdf_loss.smoothness_reg.k, algorithm='ball_tree').fit(p)
+            distances, indices = nbrs.kneighbors(sampled_xyz[b].detach().cpu().numpy())
+
+            # calculate the difference in tsdf values between neighbors
+            tsdf_values = pred[b].squeeze(1)  # (N,)
+            for i in range(N):
+                tsdf_i = tsdf_values[i]  # tsdf value of the ith point
+                neighbors_tsdf = tsdf_values[indices[i]]  # tsdf values of the neighbors
+                loss += torch.mean((tsdf_i - neighbors_tsdf) ** 2)
+        
+        loss = loss / (B * N)
+        return loss.to(device)
+    '''
+    
+    def loss_smooth(self, outputs, targets): 
+        pred = outputs['tsdf']  # [B, N, 1]
+        sampled_xyz = targets['sampled_xyz']  # [B, N, 3]
+    
+        device = pred.device
+        B, N, _ = pred.shape
+        k = self.cfg.tsdf_loss.smoothness_reg.k
+
+        # flatten the batched tensors to treat them as one large point cloud
+        p = sampled_xyz.view(-1, 3).float().cpu()  # [B * N, 3]  # use cpu fallback, cuda not supported
+        tsdf_values = pred.view(-1).cpu()  # [B * N]  # use cpu fallback, cuda not supported
+
+        # create a batch index tensor to track the batch of each point
+        batch_idx = torch.arange(B, device=p.device).repeat_interleave(N)  # [B * N]
+
+        # use torch-cluster's knn to find the k-nearest neighbors for each point
+        neighbors_idx = knn(p, p, k=k, batch_x=batch_idx, batch_y=batch_idx)
+
+        # output of knn: (2, num_edges)
+        source_points = neighbors_idx[0]  # indices of the original points
+        neighbor_points = neighbors_idx[1]  # indices of their neighbors
+
+        # gather the tsdfs of the neighbors
+        neighbor_tsdf_values = tsdf_values[neighbor_points]  # [B * N * k]
+
+        # compute the difference between each point's tsdf value and its neighbors
+        tsdf_diff = tsdf_values[source_points] - neighbor_tsdf_values
+
+        # mean squared difference
+        loss = torch.mean(tsdf_diff ** 2)
+
+        return loss.to(device)
+
+
+    def loss_eikonal(self, outputs, targets):
+        # Eikonal term to encourage unit gradient norm
+        # tsdf: (B, N, 1)
+        # query_points: (B, N, 3)
+
+        pred = outputs['tsdf']  # [B, N, 1]
+        sampled_xyz = targets['sampled_xyz']
+                   
+        # Make sure tsdf_values have the right shape for grad_outputs
+        grad_outputs = torch.ones_like(pred)
+
+        # Compute the gradient of the TSDF with respect to the input points
+        gradients = torch.autograd.grad(
+            outputs=pred,
+            inputs=sampled_xyz,
+            grad_outputs=grad_outputs,
+            create_graph=True,
+            retain_graph=True,
+            only_inputs=True
+        )[0]  # (B, N, 3)
+        
+        # norm of each gradient vector for all points in the batch
+        # gradients.norm(2, dim=-1) computes the L2 norm across the last dimension (x, y, z)
+        gradient_norm = gradients.norm(2, dim=-1)  # (B, N)
+        
+        # eikonal loss: |∇f(x)| - 1)^2, averaged over all points and batches
+        loss = ((gradient_norm - 1) ** 2).mean()        
         return loss
 
     def calculate_loss(self, outputs, targets):
         losses = {}
         losses['tsdf'] = self.loss_tsdf(outputs, targets)
         losses['combined'] = losses['tsdf']
+
+        if self.cfg.tsdf_loss.smoothness_reg:
+            losses['smooth'] = self.loss_smooth(outputs, targets)
+            losses['combined'] += self.cfg.tsdf_loss.smoothness_reg.weight * losses['smooth']
+        if self.cfg.tsdf_loss.eikonal_reg:
+            losses['eikonal'] = self.loss_eikonal(outputs, targets)
+            losses['combined'] += self.cfg.tsdf_loss.eikonal_reg.weight * losses['eikonal']
+
         return losses
 
-
+    def log_loss(self, loss, B, mode):
+        self.log(f'{mode}_loss_tsdf', loss['tsdf'], batch_size=B, sync_dist=True)
+        self.log(f'{mode}_loss', loss['combined'], batch_size=B, sync_dist=True)
+        
+        if self.cfg.tsdf_loss.use_smoothness_reg:
+            self.log(f'{mode}_loss_eikonal', loss['eikonal'], batch_size=B, sync_dist=True)
+        if self.cfg.tsdf_loss.use_eikonal_reg:
+            self.log(f'{mode}_loss_smooth', loss['smooth'], batch_size=B, sync_dist=True)
 
 
 
@@ -393,13 +484,8 @@ class GenNerf(L.LightningModule):
 
         total_loss = self.process_step(batch, 'train')
         B = batch['image'].shape[0]
-        self.log('train_loss_tsdf', total_loss['tsdf'], batch_size=B, sync_dist=True)
+        self.log_loss(total_loss, B, 'train')
 
-        # log lr
-        #lr = self.lr_schedulers().optimizer.param_groups[0]['lr']
-        #self.log('lr', lr, batch_size=B, sync_dist=True)
-        
-        #self.log('train_loss', total_loss['combined'], batch_size=B, sync_dist=True)
         return total_loss['combined']
     
 
@@ -412,8 +498,8 @@ class GenNerf(L.LightningModule):
         total_loss = self.process_step(batch, 'val')
 
         B = batch['image'].shape[0]
-        self.log('val_loss_tsdf', total_loss['tsdf'], batch_size=B, sync_dist=True)
-        #self.log('val_loss', total_loss['combined'], batch_size=B, sync_dist=True)
+        self.log_loss(total_loss, B, 'val')
+
         return total_loss['combined']
 
     def test_step(self, batch, batch_idx):
@@ -421,10 +507,12 @@ class GenNerf(L.LightningModule):
 
         B = batch['image'].shape[0]
         device = batch['image'].device
+
+        ''' # loss not working due to missing grad_fn during training mode
+        total_loss = self.process_step(batch, 'test')
         self.log('test_loss_tsdf', total_loss['tsdf'], batch_size=B, sync_dist=True)
         #self.log('test_loss', total_loss['combined'], batch_size=B, sync_dist=True)
-
-        # log mesh of predicted and target tsdf values:
+        '''
 
         # get target tsdf
         tsdf_trgt = batch['vol_%02d_tsdf'%self.voxel_sizes[0]]  # (B, 1, nx, ny, nz)
@@ -572,6 +660,7 @@ class GenNerf(L.LightningModule):
             outputs = self.forward(sampled_xyz)
             targets = {}
             targets['tsdf'] = trilinear_interpolation(tsdf_vol.permute(0, 2, 3, 4, 1), sampled_xyz, self.origin.squeeze(), self.cfg.voxel_size)
+            targets['sampled_xyz'] = sampled_xyz
             loss = self.calculate_loss(outputs, targets)
             total_loss = add_dicts(total_loss, loss)
         return total_loss

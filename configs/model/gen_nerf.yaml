@@ -67,6 +67,19 @@ code:
   num_freqs: 6 # also good 2 with freqfactor=1.5 
   freq_factor: 0.5 # 1.5
   include_input: True
+
+tsdf_loss:
+  weight: 1.0
+  log_transform: False # True (req to be false if eikonal is used)
+  log_transform_shift: 1.0
+  use_smoothness_reg: True
+  smoothness_reg:  # no big effect... -> test when using only pointnet
+    weight: 0.1
+    k: 3
+  use_eikonal_reg: True # currently not working due to gradient flow problem (in mlp-decoder?)
+  eikonal_reg:
+    weight: 0.01
+
  
 #backbone3d:
 #  channels: [32, 64, 128, 256]
