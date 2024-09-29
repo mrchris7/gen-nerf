@@ -1,106 +1,20 @@
 # Adapted from: https://github.com/magicleap/Atlas/blob/master/atlas/model.py
 
 import itertools
-import os
 import numpy as np
 from sklearn.neighbors import NearestNeighbors
 from src.models.components.positional_encoding import PositionalEncoding
 import torch
 import torch.nn.functional as F
 import lightning as L
-import wandb
-import tempfile
-from scipy.interpolate import RegularGridInterpolator
 from src.models.components.pointnet import LocalPoolPointnet
 from src.models.components.spatial_encoder import SpatialEncoder
 from src.models.components.resnetfc import ResnetFC
 from src.models.components.heads3d import TSDFHeadSimple
-from src.models.utils import add_dicts, farthest_point_sample, get_3d_points,\
-    normalize_coordinate, sample_points_in_frustum, log_transform
-from src.data.tsdf import TSDF, coordinates
-
-
-def backproject(voxel_dim, voxel_size, origin, projection, features):
-    """ Takes 2d features and fills them along rays in a 3d volume
-
-    This function implements eqs. 1,2 in https://arxiv.org/pdf/2003.10432.pdf
-    Each pixel in a feature image corresponds to a ray in 3d.
-    We fill all the voxels along the ray with that pixel's features.
-
-    Args:
-        voxel_dim: size of voxel volume to construct (nx, ny, nz)
-        voxel_size: metric size of each voxel (ex: .04m)
-        origin (1, 3): origin of the voxel volume (xyz position of voxel (0,0,0))
-        projection (B, 4, 3): projection matrices (intrinsics@extrinsics)
-        features (B, C, H, W): 2d feature tensor to be backprojected into 3d
-
-    Returns:
-        volume (B, C, nx, ny, nz): 3d feature volume
-        valid (B, 1, nx, ny, nz): boolean volume, each voxel contains a 1 if it projects to a
-                                  pixel and 0 otherwise (not in view frustrum of the camera)
-    """
-
-    B = features.size(0)
-    C = features.size(1)
-    device = features.device
-    nx, ny, nz = voxel_dim
-
-    coords = coordinates(voxel_dim, device).unsqueeze(0).expand(B,-1,-1) # (B, 3, H, W, D)
-    world = coords.type_as(projection) * voxel_size + origin.to(device).unsqueeze(2)
-    world = torch.cat((world, torch.ones_like(world[:,:1]) ), dim=1)
-    
-    camera = torch.bmm(projection, world)
-    px = (camera[:,0,:]/camera[:,2,:]).round().type(torch.long)
-    py = (camera[:,1,:]/camera[:,2,:]).round().type(torch.long)
-    pz = camera[:,2,:]
-
-    # voxels in view frustrum
-    height, width = features.size()[2:]
-    valid = (px >= 0) & (py >= 0) & (px < width) & (py < height) & (pz>0) # bxhwd
-
-    # put features in volume
-    volume = torch.zeros(B, C, nx*ny*nz, dtype=features.dtype, 
-                         device=device)
-    for b in range(B):
-        volume[b,:,valid[b]] = features[b,:,py[b,valid[b]], px[b,valid[b]]]
-
-    volume = volume.view(B, C, nx, ny, nz)
-    valid = valid.view(B, 1, nx, ny, nz)
-
-    return volume, valid
-
-# TODO: find an alternative with gpu-support
-def trilinear_interpolation(voxel_volume, xyz, origin, voxel_size):
-    """
-    Perform trilinear interpolation to map 3D world points to features in the voxel volume.
-    
-    Args:
-        voxel_volume (B, nx, ny, nz, C): voxel volume
-        xyz (B, N, 3): 3D world points
-        origin (3,): world coordinates of voxel (0, 0, 0)
-        voxel_size: size of each voxel
-    
-    Returns:
-        features (B, N, C): interpolated features
-    """
-    device = voxel_volume.device
-    B, nx, ny, nz, C = voxel_volume.shape
-    N = xyz.shape[1]
-    
-    x = torch.linspace(0.0, nx*voxel_size, nx) + origin[0]
-    y = torch.linspace(0.0, ny*voxel_size, ny) + origin[1]
-    z = torch.linspace(0.0, nz*voxel_size, nz) + origin[2]
-    points = (x, y, z) # x=(nx,) y=(ny,) z=(nz,)
-
-    features = torch.empty(B, N, C, device=device)
-    for batch in range(B):
-
-        interpolator = RegularGridInterpolator(points, voxel_volume[batch].detach().cpu(),
-                                               bounds_error=False, fill_value=None) # extrapolate outside bounds
-        interpolated_features = interpolator(xyz[batch].detach().cpu())
-        features[batch] = torch.from_numpy(interpolated_features).to(device)
-    
-    return features
+from src.models.utils import *
+from src.data.tsdf import TSDF
+from src.utils.debug_logger import DebugLogger
+from torch_cluster import knn
 
 
 class GenNerf(L.LightningModule):
@@ -138,6 +52,8 @@ class GenNerf(L.LightningModule):
 
         self.initialize_volume()
 
+        self.debug_logger = DebugLogger(cfg.debug_dir)
+        self.debug_logger.clear_data()
 
     def initialize_volume(self):
         """ Reset the accumulators.
@@ -159,7 +75,7 @@ class GenNerf(L.LightningModule):
     # accumulate information every time it is called
     # -> currently PointNet does not support dynamic accumulation:
     #    if encode() is run again, the initially used pointcloud is gone
-    def encode(self, projection, image, depth):
+    def encode(self, projection, image, depth, mode):
         """ Encodes image and corresponding pointcloud into a 3D feature volume and 
         accumulates them. This is the first half of the network which
         is run on F frames.
@@ -180,7 +96,7 @@ class GenNerf(L.LightningModule):
         depths = depth.transpose(0,1)
         projections = projection.transpose(0,1)
 
-
+        # TODO: declare dimension T in advance (momory-efficient)
         accum_sparse_xyz = torch.empty(B, 0, 3, device=device)  # accumulate point cloud for PointNet
                                                                 # (make it a persistent pointcloud with self.sparse_xyz -> memory intensive)
         
@@ -189,7 +105,7 @@ class GenNerf(L.LightningModule):
             
             # accumulate 3D volume using spatial encoder on 2D data:
             B, C, H, W = image.size()
-            feat_2d = torch.empty(B, 0, int(H/2), int(W/2), device=device)  # feature map from spatial encoder is halved
+            feat_2d = torch.empty(B, 0, H, W, device=device)  # feature map from spatial encoder is halved
             #image = self.normalizer(image) # TODO: normalize?
 
             if self.cfg.encoder.use_spatial:
@@ -204,26 +120,24 @@ class GenNerf(L.LightningModule):
                 voxel_dim = self.cfg.voxel_dim_train
             else:
                 voxel_dim = self.cfg.voxel_dim_val
-            feat_2d = F.interpolate(feat_2d, scale_factor=2, mode='bilinear', align_corners=False)
-            volume, valid = backproject(voxel_dim, self.cfg.voxel_size, self.origin, projection, feat_2d)
-            self.volume = self.volume + volume
-            self.valid = self.valid + valid
+            
+            if self.cfg.encoder.use_spatial or self.cfg.encoder.use_auxiliary:
+                volume, valid = backproject(voxel_dim, self.cfg.voxel_size, self.origin, projection, feat_2d)
+                self.volume = self.volume + volume
+                self.valid = self.valid + valid
 
 
             # accumulate a sparse 3D point cloud (later passed into PointNet):
             if self.cfg.encoder.use_pointnet:
                 xyz = get_3d_points(image, depth, projection)
-                centroids = farthest_point_sample(xyz, self.cfg.encoder.pointnet.num_sparse_points)
-                sparse_xyz = xyz[torch.arange(B)[:, None], centroids]
+                
+                sparse_xyz = farthest_point_sample(xyz, self.cfg.encoder.pointnet.num_sparse_points)
                 #sparse_xyz = self.normalizer(sparse_xyz)  # TODO: normalize?
                 accum_sparse_xyz = torch.cat((accum_sparse_xyz, sparse_xyz), dim=1)
-        
-        ######
-        #point_cloud_np = accum_sparse_xyz[0].cpu().numpy()
-        #point_cloud_o3d = o3d.geometry.PointCloud()
-        #point_cloud_o3d.points = o3d.utility.Vector3dVector(point_cloud_np)
-        #o3d.io.write_point_cloud("/home/atuin/g101ea/g101ea13/debug/point_cloud_x2.ply", point_cloud_o3d)
-        ######
+
+        if mode == 'test':
+            self.debug_logger.log_tensor("sparse_points", "sparse_points", accum_sparse_xyz)
+            self.debug_logger.log_tensor("sparse_points", "dense_points", xyz)
 
         # build volume using PointNet (currently it does not support dynamic accumulation)
         if self.cfg.encoder.use_pointnet:
@@ -235,7 +149,10 @@ class GenNerf(L.LightningModule):
         xy = normalize_coordinate(p.clone(), plane=plane, padding=self.cfg.encoder.pointnet.padding) # normalize to the range of (0, 1)
         xy = xy[:, :, None].float()
         vgrid = 2.0 * xy - 1.0 # normalize to (-1, 1)
-        c = F.grid_sample(c, vgrid, padding_mode='border', align_corners=True, mode=self.cfg.encoder.pointnet.sample_mode).squeeze(-1)
+        #c_check = F.grid_sample(c, vgrid, padding_mode='border', align_corners=True, mode=self.cfg.encoder.pointnet.sample_mode).squeeze(-1)
+        c = grid_sample_2d(c, vgrid)
+        #assert(c_check.shape == c.shape)
+        #assert(torch.allclose(c_check, c, atol=1e-3, rtol=1e-4))
         return c
 
     def map_features(self, xyz):
@@ -297,34 +214,75 @@ class GenNerf(L.LightningModule):
                            'feat_sem': (B, N, d_out_sem)
                            'tsdf': (B, N, 1)
         """
-        B, N, _ = xyz.size()
+        B, N, _ = xyz.shape
         d_out_geo = self.cfg.mlp.d_out_geo
         d_out_sem = self.cfg.mlp.d_out_sem
-        
+
         feat = self.map_features(xyz)  # [B, N, d_latent=encoder_latent]
         
-        if self.cfg.use_code:
-            B, N, _ = xyz.shape
-            xyz = xyz.reshape(-1, 3)  # (B*N, 3)
-            xyz = self.code(xyz)
-            xyz = xyz.reshape(B, N, -1)
+        with torch.set_grad_enabled(True):  # gradient for eikonal loss
+            if self.cfg.use_code:
+                xyz = xyz.reshape(-1, 3)  # (B*N, 3)
+                xyz = self.code(xyz)
+                xyz = xyz.reshape(B, N, -1)
 
-        mlp_input = torch.cat((feat, xyz), dim=-1)
+            mlp_input = torch.cat((feat, xyz), dim=-1)
+            mlp_output = self.mlp(mlp_input)
+            mlp_output = mlp_output.reshape(B, N, d_out_geo + d_out_sem)
 
-        mlp_output = self.mlp(mlp_input)
-        mlp_output = mlp_output.reshape(B, N, d_out_geo + d_out_sem)
+            feat_geo = mlp_output[...,           : d_out_geo            ]
+            feat_sem = mlp_output[..., d_out_geo : d_out_geo + d_out_sem]
+            
+            tsdf = self.head_geo(feat_geo)
 
-        feat_geo = mlp_output[...,           : d_out_geo            ]
-        feat_sem = mlp_output[..., d_out_geo : d_out_geo + d_out_sem]
-               
         outputs = {}
         outputs['feat_geo'] = feat_geo  # torch.identity(feat_geo)  # necessary?
-        outputs['feat_sem'] = feat_sem  # torch.relu(feat_sem)
-
-        tsdf = self.head_geo(feat_geo)
+        outputs['feat_sem'] = feat_sem  # torch.relu(feat_sem)    
         outputs['tsdf'] = tsdf
 
         return outputs
+
+    def configure_optimizers(self):
+        optimizers = []
+        schedulers = []
+
+        modules = [
+            self.mlp,
+            self.head_geo
+        ]
+        if self.cfg.encoder.use_spatial:
+            modules.append(self.spatial)
+        if self.cfg.encoder.use_pointnet:
+            modules.append(self.pointnet)
+        
+        params = itertools.chain(*(module.parameters() 
+                                        for module in modules))
+        
+        # optimzer
+        if self.cfg.optimizer.type == 'Adam':
+            lr = self.cfg.optimizer.lr
+            optimizer = torch.optim.Adam([
+                {'params': params, 'lr': lr}],
+                weight_decay=self.cfg.optimizer.weight_decay)
+            optimizers.append(optimizer)
+
+        else:
+            raise NotImplementedError(
+                f'optimizer {self.cfg.optimizer.type} not supported')
+
+        # scheduler
+        if self.cfg.scheduler.type == 'StepLR':
+            scheduler = torch.optim.lr_scheduler.StepLR(
+                optimizer, self.cfg.scheduler.step_size,
+                gamma=self.cfg.scheduler.gamma)
+            schedulers.append(scheduler)
+
+        elif self.cfg.scheduler.type != 'None':
+            raise NotImplementedError(
+                f'scheduler {self.cfg.scheduler.type} not supported')
+                
+        return optimizers, schedulers
+    
     
     def postprocess(self, tsdf_vol):
         """ Wraps the network output into a TSDF data structure
@@ -477,10 +435,12 @@ class GenNerf(L.LightningModule):
     # used when testing only GenNerf model
 
     def training_step(self, batch, batch_idx):
+        '''
         # required if "FrameDataset" is used!
         if batch_idx == 0:
             L.seed_everything(0, workers=True)
             #print("train rand:", np.random.random(1))
+        '''
 
         total_loss = self.process_step(batch, 'train')
         B = batch['image'].shape[0]
@@ -490,11 +450,13 @@ class GenNerf(L.LightningModule):
     
 
     def validation_step(self, batch, batch_idx):
+        '''
         # required if "FrameDataset" is used!
         if batch_idx == 0:
             L.seed_everything(1, workers=True)
             #print("val rand:", np.random.random(1))
-
+        '''
+        
         total_loss = self.process_step(batch, 'val')
 
         B = batch['image'].shape[0]
@@ -503,8 +465,6 @@ class GenNerf(L.LightningModule):
         return total_loss['combined']
 
     def test_step(self, batch, batch_idx):
-        total_loss = self.process_step(batch, 'test')
-
         B = batch['image'].shape[0]
         device = batch['image'].device
 
@@ -517,108 +477,43 @@ class GenNerf(L.LightningModule):
         # get target tsdf
         tsdf_trgt = batch['vol_%02d_tsdf'%self.voxel_sizes[0]]  # (B, 1, nx, ny, nz)
         tsdf_trgt = tsdf_trgt.squeeze(1)  # (B, nx, ny, nz)
-        print("tsdf_trgt:", tsdf_trgt.shape)
 
         # get predicted tsdf
         _, nx, ny, nz = tsdf_trgt.shape
-        volume_size = self.cfg.voxel_size*self.cfg.voxel_dim_test
+        volume_size = self.cfg.voxel_size * np.array(self.cfg.voxel_dim_test)
         print("vol-dims:", nx, ny, nz)
         print("vol-size:", volume_size)
-        x = torch.linspace(0, volume_size[0], nx, device=device)
-        y = torch.linspace(0, volume_size[1], ny, device=device)
-        z = torch.linspace(0, volume_size[2], nz, device=device)
-        grid_x, grid_y, grid_z = torch.meshgrid(x, y, z, indexing='ij')
-
-        # stack the grid coordinates and reshape to match input shape (B, N, 3)
-        grid_xyz = torch.stack([grid_x, grid_y, grid_z], dim=-1)  # (nx, ny, nz, 3)
-        
-        grid_xyz = grid_xyz.reshape(-1, 3)  # flatten to (N, 3)
+        grid_xyz = get_grid_coordinates(nx, ny, nz, volume_size, device=device)  # (nx, ny, nz, 3)
+        grid_xyz = grid_xyz.reshape(-1, 3)  # (N, 3)
         grid_xyz = grid_xyz.unsqueeze(0)  # (B=1, N, 3)
-        # optionally repeat for every batch (-> not necessary)
-        #grid_points = grid_points.repeat(B, 1, 1)  # (B, N, 3)
-        
-        # debugging:
-        debug_folder = '/home/atuin/g101ea/g101ea13/debug/test_mesh'
-        torch.save(grid_xyz, f'{debug_folder}/grid_points.pt')
+        #grid_points = grid_points.repeat(B, 1, 1)  # (B, N, 3)  # opt. repeat B times
+        grid_xyz.requires_grad_(True)
 
         outputs = self.forward(grid_xyz)
         tsdf_pred = outputs['tsdf']  # (B, N, 1)
         tsdf_pred = tsdf_pred.reshape(B, nx, ny, nz)  # (B, nx, ny, nz)
-
-        debug_folder = '/home/atuin/g101ea/g101ea13/debug/test_tsdf'
-        torch.save(tsdf_pred, f'{debug_folder}/test_pred_tsdf.pt')
-        torch.save(tsdf_trgt, f'{debug_folder}/test_trgt_tsdf.pt')
         
+        # get meshes
         pred_tsdfs = self.postprocess(tsdf_pred)
         trgt_tsdfs = self.postprocess(tsdf_trgt)
 
         pred_mesh = pred_tsdfs[0].get_mesh()
         trgt_mesh = trgt_tsdfs[0].get_mesh()
 
-        # Log image
-        #image = batch['image'][0, 0, :, :, :].cpu().numpy()
-        #image = np.transpose(image, (1, 2, 0))  # convert CHW to HWC
-        #wandb.log({"test_image": wandb.Image(image)})
+        # log to wandb
+        #log_mesh_to_wandb(pred_mesh, 'test_pred_mesh')
+        #log_mesh_to_wandb(trgt_mesh, 'test_trgt_mesh')
+        #log_image_to_wandb(batch['image'][0, 0, :, :, :], 'test_image')
 
-        # Log the meshes to wandb
-        self.log_mesh_to_wandb(pred_mesh, "test_pred_mesh")
-        self.log_mesh_to_wandb(trgt_mesh, "test_trgt_mesh")
+        # Log to disk (for debugging)
+        self.debug_logger.log_tensor('test_tsdf', 'test_pred_tsdf', tsdf_pred)
+        self.debug_logger.log_tensor('test_tsdf', 'test_trgt_tsdf', tsdf_trgt)
+        self.debug_logger.log_mesh('test_mesh', 'test_pred_mesh', pred_mesh)
+        self.debug_logger.log_mesh('test_mesh', 'test_trgt_mesh', trgt_mesh)
+        #self.debug_logger.log_tensor("test_mesh", "grid_points", grid_xyz)
 
-        return total_loss['combined']
+        return #total_loss['combined']
 
-    def log_mesh_to_wandb(self, mesh, name):
-        # create a temporary file to store the mesh
-        with tempfile.NamedTemporaryFile(suffix=".obj") as tmpfile:
-            mesh.export(tmpfile.name, file_type='obj')
-            debug_folder = '/home/atuin/g101ea/g101ea13/debug/test_mesh'
-            mesh.export(os.path.join(debug_folder, f"{name}.obj"))
-            wandb.log({name: wandb.Object3D(tmpfile.name)})
-
-    def configure_optimizers(self):
-        optimizers = []
-        schedulers = []
-
-        # allow for different learning rates between pretrained layers 
-        # (resnet backbone) and new layers (everything else).
-        ###params_backbone2d = self.backbone2d[0].parameters()
-        modules = [
-            self.mlp,
-            self.head_geo
-        ]
-        if self.cfg.encoder.use_spatial:
-            modules.append(self.spatial)
-        if self.cfg.encoder.use_pointnet:
-            modules.append(self.pointnet)
-        
-        params = itertools.chain(*(module.parameters() 
-                                        for module in modules))
-        
-        # optimzer
-        if self.cfg.optimizer.type == 'Adam':
-            lr = self.cfg.optimizer.lr
-            ###lr_backbone2d = lr * self.cfg.OPTIMIZER.BACKBONE2D_LR_FACTOR
-            optimizer = torch.optim.Adam([
-                ###{'params': params_backbone2d, 'lr': lr_backbone2d},
-                {'params': params, 'lr': lr}],
-                weight_decay=self.cfg.optimizer.weight_decay)
-            optimizers.append(optimizer)
-
-        else:
-            raise NotImplementedError(
-                f'optimizer {self.cfg.optimizer.type} not supported')
-
-        # scheduler
-        if self.cfg.scheduler.type == 'StepLR':
-            scheduler = torch.optim.lr_scheduler.StepLR(
-                optimizer, self.cfg.scheduler.step_size,
-                gamma=self.cfg.scheduler.gamma)
-            schedulers.append(scheduler)
-
-        elif self.cfg.scheduler.type != 'None':
-            raise NotImplementedError(
-                f'scheduler {self.cfg.scheduler.type} not supported')
-                
-        return optimizers, schedulers
 
     def process_step(self, batch, mode):
         image = batch['image'] # (B, T, 3, H, W)
@@ -631,7 +526,7 @@ class GenNerf(L.LightningModule):
         B, T, _, H, W = image.shape
 
         self.initialize_volume()
-        self.encode(projection, image, depth)  # encode images of whole sequence at once
+        self.encode(projection, image, depth, mode)  # encode images of whole sequence at once
 
         # transpose batch and time so we can go through sequentially
         # (B, T, 3, H, W) -> (T, B, C, H, W)
@@ -645,17 +540,20 @@ class GenNerf(L.LightningModule):
         for i, (image, depth, pose, projection, intrinsics) in enumerate(zip(images, depths, poses, projections, intrinsicss)):
             # maybe not necessary to go through all frames but only a subset?            
             sampled_xyz = sample_points_in_frustum(intrinsics, pose, self.cfg.num_points, min_dist=0.5, max_dist=4.0, img_width=W, img_height=H)
+            sampled_xyz.requires_grad_(True)
+            #xyz = get_3d_points(image, depth, projection)
+            #sampled_xyz = farthest_point_sample(xyz, self.cfg.num_points)
 
             if mode=='test':
-                # save to view locally
-                debug_folder = '/home/atuin/g101ea/g101ea13/debug/frustum_sampling'
-                xyz = get_3d_points(image, depth, projection)
-                torch.save(xyz, f'{debug_folder}/all_points_{i}.pt')
-                torch.save(sampled_xyz, f'{debug_folder}/sampled_points_{i}.pt')
-                torch.save(pose, f'{debug_folder}/pose_{i}.pt')
-                torch.save(intrinsics, f'{debug_folder}/intrinsics_{i}.pt')
-                torch.save(image, f'{debug_folder}/image_{i}.pt')
-                torch.save(depth, f'{debug_folder}/depth_{i}.pt')
+                #xyz = get_3d_points(image, depth, projection)                
+                #self.debugger.log_tensor('frustum_sampling', f'all_points_{i}', xyz)
+                self.debug_logger.log_tensor('frustum_sampling', f'sampled_points_{i}', sampled_xyz)
+                self.debug_logger.log_tensor('frustum_sampling', f'pose_{i}', pose)
+                self.debug_logger.log_tensor('frustum_sampling', f'intrinsics_{i}', intrinsics)
+                self.debug_logger.log_tensor('frustum_sampling', f'image_{i}', image)
+                self.debug_logger.log_tensor('frustum_sampling', f'depth_{i}', depth)
+            
+            #log_image_to_wandb(batch['image'][0, i, :, :, :], f'{mode}_image_{i}')
 
             outputs = self.forward(sampled_xyz)
             targets = {}
@@ -663,4 +561,31 @@ class GenNerf(L.LightningModule):
             targets['sampled_xyz'] = sampled_xyz
             loss = self.calculate_loss(outputs, targets)
             total_loss = add_dicts(total_loss, loss)
+        #raise Exception()
         return total_loss
+    
+    def test_grad(self, input, output=None):
+        print("test gradients:")
+        
+        x_b = input  # (N, 3)
+        print("x:", x_b.shape)
+        print("x_grad:", x_b.grad_fn)
+        print("x_grad:", x_b.requires_grad)
+        
+        if output == None:
+            return
+        y_b = output  # (N, 1)
+        print("y:", y_b.shape)
+        print("y_grad:", y_b.grad_fn)
+        print("y_grad:", y_b.requires_grad)
+        
+        gradients = torch.autograd.grad(
+            outputs=y_b,  # prediction
+            inputs=x_b,  # query
+            grad_outputs=torch.ones_like(y_b),  # Grad output for autograd
+            create_graph=True,
+            retain_graph=True,
+            only_inputs=True,
+            allow_unused=True
+        )[0]
+        print("result gradients:", gradients)

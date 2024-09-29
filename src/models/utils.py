@@ -1,7 +1,13 @@
-import torch
-from torch import nn
 import functools
+import os
 import numpy as np
+import wandb
+import torch
+import torch.nn.functional as F
+from torch import nn
+from scipy.interpolate import RegularGridInterpolator
+from src.data.tsdf import coordinates
+import tempfile
 
 
 def read_matrix(file_path):
@@ -66,7 +72,7 @@ def coordinate2index(x, reso, coord_type='2d'):
     return index
 
 
-def normalize_coordinate(p, padding=0.1, plane='xz'):
+def normalize_coordinate(p, padding=0.1, plane='xz', encode=True):
     ''' Normalize coordinate to [0, 1] for unit cube experiments
 
     Args:
@@ -182,7 +188,7 @@ def farthest_point_sample(xyz, npoint):
         xyz: pointcloud data, [B, N, 3]
         npoint: number of samples
     Return:
-        centroids: sampled pointcloud index, [B, npoint]
+        sampled_xyz: sparse pointcloud data [B, npoint, 3]
     """
     device = xyz.device
     B, N, C = xyz.shape
@@ -197,7 +203,9 @@ def farthest_point_sample(xyz, npoint):
         mask = dist < distance
         distance[mask] = dist[mask]
         farthest = torch.max(distance, -1)[1]
-    return centroids
+    # centroids = sampled pointcloud index, [B, npoint]
+    sampled_xyz = xyz[torch.arange(B)[:, None], centroids]  # [B, npoint, 3]
+    return sampled_xyz
 
 
 def log_transform(x, shift=1):
@@ -609,6 +617,79 @@ def add_dicts(dict1, dict2):
     for key in dict1:
         result[key] = dict1.get(key, 0) + dict2.get(key, 0)
     return result
+
+
+def log_mesh_to_wandb(mesh, name):
+    with tempfile.NamedTemporaryFile(suffix=".obj") as tmpfile:
+        mesh.export(tmpfile.name, file_type='obj')
+        wandb.log({name: wandb.Object3D(tmpfile.name)})
+
+
+def log_image_to_wandb(image_tensor, name):
+    img = image_tensor.cpu().numpy()
+    img = np.transpose(img, (1, 2, 0))  # convert CHW to HWC
+    wandb.log({name: wandb.Image(img)})
+
+
+def get_grid_coordinates(nx, ny, nz, volume_size, device):
+    x = torch.linspace(0, volume_size[0], nx, device=device)
+    y = torch.linspace(0, volume_size[1], ny, device=device)
+    z = torch.linspace(0, volume_size[2], nz, device=device)
+    grid_x, grid_y, grid_z = torch.meshgrid(x, y, z, indexing='ij')
+
+    # stack the grid coordinates and reshape to match input shape (B, N, 3)
+    grid_xyz = torch.stack([grid_x, grid_y, grid_z], dim=-1)  # (nx, ny, nz, 3)
+    return grid_xyz
+
+
+def backproject(voxel_dim, voxel_size, origin, projection, features):
+    """ Takes 2d features and fills them along rays in a 3d volume
+
+    This function implements eqs. 1,2 in https://arxiv.org/pdf/2003.10432.pdf
+    Each pixel in a feature image corresponds to a ray in 3d.
+    We fill all the voxels along the ray with that pixel's features.
+
+    Args:
+        voxel_dim: size of voxel volume to construct (nx, ny, nz)
+        voxel_size: metric size of each voxel (ex: .04m)
+        origin (1, 3): origin of the voxel volume (xyz position of voxel (0,0,0))
+        projection (B, 4, 3): projection matrices (intrinsics@extrinsics)
+        features (B, C, H, W): 2d feature tensor to be backprojected into 3d
+
+    Returns:
+        volume (B, C, nx, ny, nz): 3d feature volume
+        valid (B, 1, nx, ny, nz): boolean volume, each voxel contains a 1 if it projects to a
+                                  pixel and 0 otherwise (not in view frustrum of the camera)
+    """
+
+    B = features.size(0)
+    C = features.size(1)
+    device = features.device
+    nx, ny, nz = voxel_dim
+
+    coords = coordinates(voxel_dim, device).unsqueeze(0).expand(B,-1,-1) # (B, 3, H, W, D)
+    world = coords.type_as(projection) * voxel_size + origin.to(device).unsqueeze(2)
+    world = torch.cat((world, torch.ones_like(world[:,:1]) ), dim=1)
+    
+    camera = torch.bmm(projection, world)
+    px = (camera[:,0,:]/camera[:,2,:]).round().type(torch.long)
+    py = (camera[:,1,:]/camera[:,2,:]).round().type(torch.long)
+    pz = camera[:,2,:]
+
+    # voxels in view frustrum
+    height, width = features.size()[2:]
+    valid = (px >= 0) & (py >= 0) & (px < width) & (py < height) & (pz>0) # bxhwd
+
+    # put features in volume
+    volume = torch.zeros(B, C, nx*ny*nz, dtype=features.dtype, 
+                         device=device)
+    for b in range(B):
+        volume[b,:,valid[b]] = features[b,:,py[b,valid[b]], px[b,valid[b]]]
+
+    volume = volume.view(B, C, nx, ny, nz)
+    valid = valid.view(B, 1, nx, ny, nz)
+
+    return volume, valid
 
 
 def trilinear_interpolation(voxel_volume, xyz, origin, voxel_size):

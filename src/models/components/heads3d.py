@@ -34,7 +34,12 @@ class TSDFHeadSimple(nn.Module):
         Returns:
             tsdf: Tensor of shape (B, N, 1) with regressed TSDF values
         """
-        tsdf = self.fc(x)
+        y = self.fc(x)
+        tsdf = torch.tanh(y)  # 1.05=label_smoothing
+        
+        #print("tsdf-shape", tsdf.shape)
+        #print("tsdf", tsdf[0, 100:130, :])
+        #tsdf = 1.7159 * torch.tanh(2/3 * y)
         return tsdf
     
     
