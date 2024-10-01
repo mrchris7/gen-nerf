@@ -310,8 +310,8 @@ class GenNerf(L.LightningModule):
         mask_outside  = (trgt == 1).all(-1, keepdim=True)
         
         if self.cfg.tsdf_loss.log_transform: # breaks gradient for eikonal loss calculation
-            pred = log_transform(pred, self.cfg.tsdf_loss.log_transform_shift)
-            trgt = log_transform(trgt, self.cfg.tsdf_loss.log_transform_shift)
+            pred = smooth_log_transform(pred, self.cfg.tsdf_loss.log_transform_shift, self.cfg.tsdf_loss.log_transform_beta)
+            trgt = smooth_log_transform(trgt, self.cfg.tsdf_loss.log_transform_shift, self.cfg.tsdf_loss.log_transform_beta)
 
         loss = F.l1_loss(pred, trgt, reduction='none') * self.cfg.tsdf_loss.weight
         loss = loss[mask_observed | mask_outside].mean()
@@ -409,10 +409,10 @@ class GenNerf(L.LightningModule):
         losses['tsdf'] = self.loss_tsdf(outputs, targets)
         losses['combined'] = losses['tsdf']
 
-        if self.cfg.tsdf_loss.smoothness_reg:
+        if self.cfg.tsdf_loss.use_smoothness_reg:
             losses['smooth'] = self.loss_smooth(outputs, targets)
             losses['combined'] += self.cfg.tsdf_loss.smoothness_reg.weight * losses['smooth']
-        if self.cfg.tsdf_loss.eikonal_reg:
+        if self.cfg.tsdf_loss.use_eikonal_reg:
             losses['eikonal'] = self.loss_eikonal(outputs, targets)
             losses['combined'] += self.cfg.tsdf_loss.eikonal_reg.weight * losses['eikonal']
 
@@ -423,10 +423,10 @@ class GenNerf(L.LightningModule):
         self.log(f'{mode}_loss', loss['combined'], batch_size=B, sync_dist=True)
         
         if self.cfg.tsdf_loss.use_smoothness_reg:
-            self.log(f'{mode}_loss_eikonal', loss['eikonal'], batch_size=B, sync_dist=True)
-        if self.cfg.tsdf_loss.use_eikonal_reg:
             self.log(f'{mode}_loss_smooth', loss['smooth'], batch_size=B, sync_dist=True)
 
+        if self.cfg.tsdf_loss.use_eikonal_reg:
+            self.log(f'{mode}_loss_eikonal', loss['eikonal'], batch_size=B, sync_dist=True)
 
 
 
@@ -468,11 +468,9 @@ class GenNerf(L.LightningModule):
         B = batch['image'].shape[0]
         device = batch['image'].device
 
-        ''' # loss not working due to missing grad_fn during training mode
+        # loss not working due to missing grad_fn during training mode
         total_loss = self.process_step(batch, 'test')
-        self.log('test_loss_tsdf', total_loss['tsdf'], batch_size=B, sync_dist=True)
-        #self.log('test_loss', total_loss['combined'], batch_size=B, sync_dist=True)
-        '''
+        self.log_loss(total_loss, B, 'test')
 
         # get target tsdf
         tsdf_trgt = batch['vol_%02d_tsdf'%self.voxel_sizes[0]]  # (B, 1, nx, ny, nz)
@@ -539,7 +537,7 @@ class GenNerf(L.LightningModule):
         total_loss = {}
         for i, (image, depth, pose, projection, intrinsics) in enumerate(zip(images, depths, poses, projections, intrinsicss)):
             # maybe not necessary to go through all frames but only a subset?            
-            sampled_xyz = sample_points_in_frustum(intrinsics, pose, self.cfg.num_points, min_dist=0.5, max_dist=4.0, img_width=W, img_height=H)
+            sampled_xyz = sample_points_in_frustum(intrinsics, pose, self.cfg.num_points, min_dist=self.cfg.min_dist, max_dist=self.cfg.max_dist, img_width=W, img_height=H)
             sampled_xyz.requires_grad_(True)
             #xyz = get_3d_points(image, depth, projection)
             #sampled_xyz = farthest_point_sample(xyz, self.cfg.num_points)

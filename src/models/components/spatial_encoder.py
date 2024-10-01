@@ -5,7 +5,7 @@ import torch.autograd.profiler as profiler
 import torch.nn.functional as F
 import torchvision
 from torch import nn
-from src.models.utils import get_norm_layer
+from src.models.utils import apply_gaussian_smoothing, get_norm_layer
 
 TORCHVISION_WEIGHTS = {
     "resnet18": torchvision.models.resnet.ResNet18_Weights.DEFAULT,
@@ -30,6 +30,9 @@ class SpatialEncoder(nn.Module):
         feature_scale=1.0,
         use_first_pool=True,
         norm_type="batch",
+        blur_image=False,
+        kernel_size=5,
+        sigma=1.0
     ):
         """
         :param backbone Backbone network. Either resnet18, resnet34 or resnet50 model from torchvision
@@ -73,6 +76,9 @@ class SpatialEncoder(nn.Module):
         self.upsample_interp = upsample_interp
         self.register_buffer("latent", torch.empty(1, 1, 1, 1), persistent=False)
         self.register_buffer("latent_scaling", torch.empty(2, dtype=torch.float32), persistent=False)
+        self.blur_image = blur_image
+        self.kernel_size = kernel_size
+        self.sigma = sigma
 
     def index(self, uv, cam_z=None, image_size=(), z_bounds=None):
         """
@@ -111,6 +117,7 @@ class SpatialEncoder(nn.Module):
         :param x image (B, C, H, W)
         :return latent (B, latent_size, H, W)  # (actually it is H/2, W/2)
         """
+        x = apply_gaussian_smoothing(x, kernel_size=41, sigma=10.0)
         if self.feature_scale != 1.0:
             x = F.interpolate(
                 x,

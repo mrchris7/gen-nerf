@@ -207,13 +207,71 @@ def farthest_point_sample(xyz, npoint):
     sampled_xyz = xyz[torch.arange(B)[:, None], centroids]  # [B, npoint, 3]
     return sampled_xyz
 
-
+# not used
 def log_transform(x, shift=1):
     """ 
     Logarithmic scaling: rescales TSDF values to weight voxels near the surface 
     more than close to the truncation distance
     """
     return x.sign() * (1 + x.abs() / shift).log()
+
+
+def smooth_log_transform(x, shift=1, beta=1):
+    """
+    Smooth logarithmic-like scaling without non-differentiable sign operations.
+    Instead of `sign`, we use `tanh` for differentiability.
+    
+    Args:
+    - x: Tensor, TSDF values
+    - shift: A small positive constant to avoid singularities
+    - beta: Controls the smoothness of the transformation
+    
+    Returns:
+    - Transformed TSDF values with smooth gradients.
+    """
+    # smooth approximation to sign using tanh
+    return torch.tanh(x) * torch.nn.functional.softplus(x.abs() / shift, beta=beta)
+
+
+def gaussian_kernel(kernel_size, sigma):
+    """Generates a 2D Gaussian kernel."""
+    # create a 1D tensor with equally spaced values centered at 0
+    x = torch.linspace(-(kernel_size // 2), kernel_size // 2, kernel_size)
+    gauss_1d = torch.exp(-x.pow(2) / (2 * sigma**2))
+    gauss_1d /= gauss_1d.sum()  # normalize
+
+    # generate a 2D kernel
+    gauss_2d = torch.outer(gauss_1d, gauss_1d)
+    # additional dim for compatibility with conv2d
+    gauss_2d = gauss_2d.unsqueeze(0).unsqueeze(0)
+    
+    return gauss_2d
+
+def apply_gaussian_smoothing(image, kernel_size, sigma):
+    """
+    Apply Gaussian smoothing to a batch of images.
+    
+    Args:
+    - image: A tensor of shape (B, C, H, W)
+    - kernel_size: The size of the Gaussian kernel
+    - sigma: The standard deviation of the Gaussian distribution
+    
+    Returns:
+    - Smoothed image (B, C, H, W)
+    """
+    B, C, H, W = image.shape
+    
+    # create a gaussian kernel (1, 1, kernel_size, kernel_size)
+    kernel = gaussian_kernel(kernel_size, sigma).to(image.device)
+    
+    # repeat the kernel for each channel in the batch
+    kernel = kernel.repeat(C, 1, 1, 1)  # (C, 1, kernel_size, kernel_size)
+    
+    # apply the filter to each channel
+    # 'padding='same' to keep the output size the same as input
+    smoothed_image = F.conv2d(image, kernel, padding=kernel_size // 2, groups=C)
+    
+    return smoothed_image
 
 
 def unproj_map(width, height, f, c=None, device="cpu"):
@@ -729,11 +787,16 @@ def trilinear_interpolation(voxel_volume, xyz, origin, voxel_size):
     samples = xyz_norm.view(B, N, 1, 1, 3)  # (B, N, 1, 1, 3)
     '''
     features = F.grid_sample(voxel_volume, samples, mode='bilinear', align_corners=True, padding_mode='border')
+    #features = grid_sample_3d(voxel_volume, samples)
+    #print("features_old", features_old.shape)
+    #print("features_new", features_new.shape)
+    #assert(torch.allclose(features_old, features_new, atol=1e-3, rtol=1e-4))
     features = features.view(B, C, N).permute(0, 2, 1)  # (B, C, N) -> (B, N, C)
     
     return features
 
 '''
+# use this if spatial net is used also -> else: CUDA OUT OF MEMORY
 def trilinear_interpolation(voxel_volume, xyz, origin, voxel_size):
     """
     Perform trilinear interpolation to map 3D world points to features in the voxel volume.
@@ -923,7 +986,7 @@ def grid_sample_3d(image, optical):
         torch.clamp(iy_bse, 0, IH - 1, out=iy_bse)
         torch.clamp(iz_bse, 0, ID - 1, out=iz_bse)
 
-    image = image.view(N, C, ID * IH * IW)
+    image = image.reshape(N, C, ID * IH * IW)
 
     tnw_val = torch.gather(image, 2, (iz_tnw * IW * IH + iy_tnw * IW + ix_tnw).long().view(N, 1, D * H * W).repeat(1, C, 1))
     tne_val = torch.gather(image, 2, (iz_tne * IW * IH + iy_tne * IW + ix_tne).long().view(N, 1, D * H * W).repeat(1, C, 1))
