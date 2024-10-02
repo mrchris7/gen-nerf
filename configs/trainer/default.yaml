@@ -11,6 +11,8 @@ devices: 1
 # mixed precision for extra speed-up
 precision: bf16-mixed  # 16bit of 32bit
 
+log_every_n_steps: 50 # default 50
+
 # perform a validation loop every N training epochs
 check_val_every_n_epoch: 1
 

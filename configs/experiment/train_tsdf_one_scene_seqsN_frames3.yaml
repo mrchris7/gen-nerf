@@ -4,7 +4,7 @@
 # python train.py experiment=train_tsdf_one_frame
 
 defaults:
-  - override /data: gpu_one_frame
+  - override /data: gpu_one_scene_seqs
   - override /model: gen_nerf
   - override /callbacks: default
   - override /logger: null
@@ -14,28 +14,28 @@ defaults:
 # all parameters below will be merged with parameters from default configurations set above
 # this allows you to overwrite only specified parameters
 
-tags: ['dev', 'cluster', 'one_frame', 'only_tsdf']
+tags: ['dev', 'cluster', 'one_scene_seqs', 'only_tsdf']
 
 seed: 0
 
 trainer:
   devices: 1
   num_nodes: 1
-  min_epochs: 5
-  max_epochs: 5
+  min_epochs: 20
+  max_epochs: 20
   log_every_n_steps: 1
   check_val_every_n_epoch: 1
   #gradient_clip_val: 0.5
 
 model:
   optimizer:
-    lr: 0.0001
+    lr: 0.000001
     weight_decay: 0.0001
   scheduler:
     step_size: 300
     gamma: 0.1
   compile: false
-  
+
   encoder:
     use_spatial: false
     spatial:
@@ -49,11 +49,13 @@ model:
       plane_resolution: 128
       unet_kwargs:
         depth: 3
+  num_points: 512
 
   mlp:
     d_out_sem: 1
     d_out_geo: 64
     n_blocks: 5
+    beta: 0.0
   
   use_code: True
   code:
@@ -76,11 +78,19 @@ model:
 
 data:
   batch_size_train: 1  # Needs to be divisible by the number of devices
-  frame_idx: 5466 # 5466 3567 # 0
-  length_train: 30 #75 
-  length_val: 10 #20
-  length_test: 1 #5
-  scene_idx: 0
+  dataset_type: 'sequences'  # 'sequences' or 'frame' or 'scene'
+  sequence_amount_train: 0.3  # controls the number of sequences scene-denpendently
+                        # num_sequences = sequence_amount * (num_scene_frames / sequence_length)
+  sequence_amount_val: 0.1
+  sequence_amount_test: 0.05
+  sequence_length: 100  # number of raw frames to be considered as one sequence
+  sequence_locations: 'free' # 'free' or 'fixed' or 'evenly_spaced'
+  sequence_order: 'random'  # 'random' or 'sorted'
+  num_frames_train: 3  # number of frames to select from a sequence (-1 = sequence_length)
+  num_frames_val: 3
+  num_frames_test: 3
+  frame_locations: 'evenly_spaced'  # 'free' or 'evenly_spaced'
+  frame_order: 'random'  # 'random' or 'sorted'
   voxel_size: .04
   voxel_dim_train: [200, 250, 64] # [160, 160, 64]
   voxel_dim_val: [200, 250, 64] # [256, 256, 96]
@@ -94,7 +104,7 @@ data:
 
 logger:
   wandb:
-    #name: "train_tsdf_one_frame"
+    #name: "train_tsdf_one_scene_seqsN_frames3"
     job_type: "experimental" # train / eval / test / experimental / sweep
     tags: ${tags}
     

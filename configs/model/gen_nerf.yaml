@@ -13,6 +13,7 @@ scheduler:
 teacher:
   none: none
 
+debug_dir: ${paths.debug_dir}
 voxel_size: ${data.voxel_size}
 voxel_dim_train: ${data.voxel_dim_train}
 voxel_dim_val: ${data.voxel_dim_val}
@@ -26,19 +27,22 @@ encoder:
   spatial:
     backbone: 'resnet34'  # resnet18, resnet34, resnet50
     pretrained: true
-    num_layers: 3 # latent_size = [0, 64, 128, 256, 512, 1024][num_layers]  # initially 4 -> CUDA out of memory
+    num_layers: 4 # latent_size = [0, 64, 128, 256, 512, 1024][num_layers]  # initially 4 -> CUDA out of memory
     index_interp: 'bilinear'
     index_padding: 'border'
     upsample_interp: 'bilinear'
-    feature_scale: 1.0
+    feature_scale: 2.0
     use_first_pool: true
     norm_type: 'batch'
+    blur_image: true
+    kernel_size: 41
+    sigma: 10.0
   use_pointnet: true
   pointnet:  # based on: pointcloud/room_3plane.yaml from conv_onet
     num_sparse_points: 512
-    c_dim: 32  # originally: mode.c_dim
-    dim: 3  # originally: data.dim
-    padding: 0.1  # originally: data.padding
+    c_dim: 32
+    dim: 3
+    padding: 0.1
     hidden_dim: 32
     scatter_type: 'max'  # or 'min'
     plane_type: ['xz', 'xy', 'yz']
@@ -53,14 +57,14 @@ encoder:
   use_auxiliary: false  # whether to additionally encode teacher-features
 
 mlp:
-    d_out_sem: 64  # semantic feature
-    d_out_geo: 64  # geometric feature -> tsdf   # TODO: check what is the input dim of the tsdf-head3d
-    n_blocks: 5
-    d_hidden: 512
-    combine_layer: 3
-    combine_type: average
-    beta: 0.0
-    use_spade: False
+  d_out_sem: 32  # semantic feature
+  d_out_geo: 32  # geometric feature -> tsdf
+  n_blocks: 5
+  d_hidden: 512
+  combine_layer: 3
+  combine_type: average
+  beta: 0.0
+  use_spade: False
 
 use_code: True # positional encoding
 code:
@@ -70,33 +74,16 @@ code:
 
 tsdf_loss:
   weight: 1.0
-  log_transform: False # True (req to be false if eikonal is used)
-  log_transform_shift: 1.0
-  use_smoothness_reg: True
-  smoothness_reg:  # no big effect... -> test when using only pointnet
+  log_transform: True  # smoothed log transform -> differentiable for eik loss
+  log_transform_shift: 20.0
+  log_transform_beta: 8.0
+  use_smoothness_reg: False
+  smoothness_reg:  # no improvement
     weight: 0.1
     k: 3
-  use_eikonal_reg: True # currently not working due to gradient flow problem (in mlp-decoder?)
+  use_eikonal_reg: False # no improvement
   eikonal_reg:
     weight: 0.01
-
- 
-#backbone3d:
-#  channels: [32, 64, 128, 256]
-#  layers_down: [1, 2, 3, 4]
-#  layers: [3, 2, 1]
-#  norm: 'nnSyncBN'
-#  drop: 0.
-#  conditional_skip: false
-#head_geo:
-#  multi_scale: 4
-#  label_smoothing: 0
-#  loss_split: 0
-#  sparse_threshold: 0
-#  loss_weight: 1.
-#  loss_log_transform: true
-#  loss_log_transform_shift: 1.0
-
 
 
 # compile model for faster training with pytorch 2.0

@@ -4,7 +4,7 @@
 # python train.py experiment=train_tsdf_one_frame
 
 defaults:
-  - override /data: gpu_one_frame
+  - override /data: gpu_one_scene
   - override /model: gen_nerf
   - override /callbacks: default
   - override /logger: null
@@ -14,73 +14,52 @@ defaults:
 # all parameters below will be merged with parameters from default configurations set above
 # this allows you to overwrite only specified parameters
 
-tags: ['dev', 'cluster', 'one_frame', 'only_tsdf']
+tags: ['dev', 'cluster', 'one_scene', 'only_tsdf']
 
 seed: 0
 
 trainer:
   devices: 1
   num_nodes: 1
-  min_epochs: 5
-  max_epochs: 5
+  min_epochs: 4 # 10
+  max_epochs: 4 # 10
   log_every_n_steps: 1
-  check_val_every_n_epoch: 1
+  check_val_every_n_epoch: 2
   #gradient_clip_val: 0.5
 
 model:
   optimizer:
     lr: 0.0001
-    weight_decay: 0.0001
   scheduler:
     step_size: 300
     gamma: 0.1
   compile: false
   
+  #debug:
+  mlp:
+    d_out_sem: 1
+    d_out_geo: 64
+    n_blocks: 2  # if too high -> tanh dies
   encoder:
-    use_spatial: false
+    use_spatial: true
     spatial:
       backbone: 'resnet34'
       use_first_pool: true
     use_pointnet: true
     pointnet:
       num_sparse_points: 512
-      n_blocks: 4
-      c_dim: 64
+      n_blocks: 2 # 5
+      c_dim: 32
       plane_resolution: 128
       unet_kwargs:
-        depth: 3
-
-  mlp:
-    d_out_sem: 1
-    d_out_geo: 64
-    n_blocks: 5
-  
-  use_code: True
-  code:
-    num_freqs: 6 
-    freq_factor: 0.5
-    include_input: True
-
-  tsdf_loss:
-    weight: 1.0
-    log_transform: True
-    log_transform_shift: 15.0
-    log_transform_beta: 10.0
-    use_smoothness_reg: False
-    smoothness_reg:
-      weight: 0.1
-      k: 3
-    use_eikonal_reg: False
-    eikonal_reg:
-      weight: 0.01
+        depth: 2 # 5
+  num_points: 512
 
 data:
   batch_size_train: 1  # Needs to be divisible by the number of devices
-  frame_idx: 5466 # 5466 3567 # 0
-  length_train: 30 #75 
-  length_val: 10 #20
-  length_test: 1 #5
-  scene_idx: 0
+  frames_train: [5425, 5425, 5425, 5425, 5425, 5425, 5425, 5425, 5425, 5425, 5466, 5466, 5466, 5466, 5466, 5466, 5466, 5466, 5466, 5466, 5500, 5500, 5500, 5500, 5500, 5500, 5500, 5500, 5500, 5500] #[0, 20, 40] #75 (30)
+  frames_val: [5440, 5440, 5440, 5440, 5440, 5440, 5440, 5440, 5440, 5440] #[10, 30] #20
+  frames_test: [5480] #[25] #5
   voxel_size: .04
   voxel_dim_train: [200, 250, 64] # [160, 160, 64]
   voxel_dim_val: [200, 250, 64] # [256, 256, 96]
@@ -94,7 +73,7 @@ data:
 
 logger:
   wandb:
-    #name: "train_tsdf_one_frame"
+    #name: "train_tsdf_one_scene"
     job_type: "experimental" # train / eval / test / experimental / sweep
     tags: ${tags}
     

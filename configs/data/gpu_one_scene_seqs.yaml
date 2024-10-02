@@ -4,9 +4,6 @@ defaults:
 datasets_train: ['/scans/scene0000_00/info.json']
 datasets_val: ['/scans/scene0000_00/info.json']
 datasets_test: ['/scans/scene0000_00/info.json']
-dataset_type: 'scene'
-frame_idx: 0
-num_frames_train: 75
-num_frames_val: 20
-num_frames_test: 5
-scene_idx: 0
+sequence_amount_train: 0.8
+sequence_amount_val: 0.1
+sequence_amount_test: 0.1

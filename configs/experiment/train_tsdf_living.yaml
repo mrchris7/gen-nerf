@@ -35,6 +35,7 @@ model:
 
 data:
   batch_size_train: 1  # Needs to be divisible by the number of devices
+  dataset_type: 'sequences'
   sequence_amount: 0.8
   sequence_length: 200
   sequence_locations: 'free' # 'free' or 'fixed' or 'evenly_spaced'
