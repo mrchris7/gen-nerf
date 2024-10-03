@@ -535,12 +535,33 @@ class GenNerf(L.LightningModule):
         intrinsicss = intrinsics.transpose(0,1)
 
         total_loss = {}
-        for i, (image, depth, pose, projection, intrinsics) in enumerate(zip(images, depths, poses, projections, intrinsicss)):
-            # maybe not necessary to go through all frames but only a subset?            
-            sampled_xyz = sample_points_in_frustum(intrinsics, pose, self.cfg.num_points, min_dist=self.cfg.min_dist, max_dist=self.cfg.max_dist, img_width=W, img_height=H)
+        for i, (image, depth, pose, projection, intrinsics) in enumerate(zip(images, depths, poses, projections, intrinsicss)):          
+            
+            if self.cfg.sampling_mode == 'ray':
+                sampled_xyz = sample_points_on_rays(intrinsics, pose, depth,
+                                                    num_samples=self.cfg.ray.num_rays,
+                                                    N=self.cfg.ray.N, M=self.cfg.ray.M,
+                                                    delta=self.cfg.ray.delta,
+                                                    min_dist=self.cfg.ray.d_min,
+                                                    sigma=self.cfg.ray.sigma)
+                
+            elif self.cfg.sampling_mode == 'frustum':
+                free_xyz = sample_points_in_frustum(intrinsics, pose,
+                                                    num_samples=self.cfg.frustum.N,
+                                                    min_dist=self.cfg.frustum.d_min,
+                                                    max_dist=self.cfg.frustum.d_max,
+                                                    img_width=W,
+                                                    img_height=H)
+                xyz = get_3d_points(image, depth, projection)
+                surface_xyz = farthest_point_sample(xyz, self.cfg.frustum.M)
+                noise = torch.normal(mean=0.0, std=self.cfg.frustum.sigma, size=surface_xyz.shape, device=surface_xyz.device)
+                surface_xyz += noise
+                sampled_xyz = torch.cat((free_xyz, surface_xyz), dim=1)
+
+            else:
+                raise NotImplementedError(f"Usage of unknown sampling_mode: {self.cfg.sampling_mode}")
+
             sampled_xyz.requires_grad_(True)
-            #xyz = get_3d_points(image, depth, projection)
-            #sampled_xyz = farthest_point_sample(xyz, self.cfg.num_points)
 
             if mode=='test':
                 #xyz = get_3d_points(image, depth, projection)                

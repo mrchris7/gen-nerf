@@ -18,9 +18,21 @@ voxel_size: ${data.voxel_size}
 voxel_dim_train: ${data.voxel_dim_train}
 voxel_dim_val: ${data.voxel_dim_val}
 voxel_dim_test: ${data.voxel_dim_test}
-num_rays: 512
-num_points_per_ray: 32  # or 64
-num_points: 512  # directly sample points (if renderer is not used)
+
+sampling_mode: 'ray'  # 'ray' or 'frustum'
+ray:  # follows iSDF
+  num_rays: 100
+  N: 20
+  M: 8
+  d_min: 0.07
+  delta: 0.1
+  sigma: 0.1
+frustum:
+  N: 384
+  M: 128
+  sigma: 0.1
+  d_min: 0.5
+  d_max: 4.0
 
 encoder:
   use_spatial: true

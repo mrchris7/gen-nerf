@@ -53,7 +53,6 @@ model:
       plane_resolution: 128
       unet_kwargs:
         depth: 2 # 5
-  num_points: 512
 
 data:
   batch_size_train: 1  # Needs to be divisible by the number of devices

@@ -401,6 +401,91 @@ def sample_points_in_frustum(intrinsics, pose, num_samples, min_dist, max_dist, 
     return xyz_world
 
 
+def sample_points_on_rays(intrinsics, poses, depth, num_samples, N, M, delta, min_dist, sigma):
+    """
+    Sample points within the camera's view frustum in world coordinates for a batch of cameras using rays.
+    Implementation of iSDF: https://arxiv.org/abs/2204.02296
+    
+    Parameters:
+        intrinsics (B, 3, 3): batch of camera intrinsic matrices
+        poses (B, 4, 4): batch of camera poses in world coordinates (extrinsics)
+        depth (B, H, W): depth map for each camera
+        num_samples (int): number of pixel samples for each camera
+        N: number of stratified samples
+        M: number of samples around the surface
+        delta: distance behind surface
+        min_dist: minimum distance for stratified sampling
+        sigma: standard deviation for Gaussian samples
+        
+    Returns:
+        xyz_world (B, num_samples * (N + M + 1), 3): sampled points in world coordinates for each camera
+    """
+    B, H, W = depth.shape
+    device = intrinsics.device
+
+    # randomly sample pixel coordinates
+    u = torch.randint(0, W, (B, num_samples), device=device)
+    v = torch.randint(0, H, (B, num_samples), device=device)
+    
+    # sample depth values
+    sampled_depths_list = []
+    for b in range(B):
+        # TODO: prevent sampling pixels with missing depth information (depth=0)
+        D = depth[b, v[b], u[b]]  # depth at sampled pixels
+        D = D.squeeze()  # (num_samples)
+        
+        # N stratified samples in range [min_dist, D + delta] for each sample
+        stratified_depths = torch.empty(num_samples, N, device=device)  # (num_samples, N)
+        for i in range(num_samples):
+            stratified_depths[i] = torch.linspace(min_dist, D[i] + delta, N, device=device)  # (N,)
+        
+        # M samples from gaussian distribution around the surface depth
+        D_extended = D.unsqueeze(-1).expand(num_samples, M).to(device) # (num_samples, M)
+        sigma_extended = sigma * torch.ones((num_samples, M), device=device)  # (num_samples, M)
+        gaussian_depths = torch.normal(D_extended, sigma_extended)  # (num_samples, M)
+        
+        # 1 surface sample
+        surface_depth = D.unsqueeze(-1)  # (num_samples, 1)
+        
+        # combine samples N+M+1
+        sampled_depths = torch.cat((stratified_depths, gaussian_depths, surface_depth), dim=1)  # (num_samples, N+M+1)
+        sampled_depths_list.append(sampled_depths)
+
+    # stack the results from all cameras/batches
+    z = torch.stack(sampled_depths_list)  # (B, num_samples, N+M+1)
+
+    # convert 2D pixel coordinates to normalized image coordinates for each camera
+    u_norm = (u - intrinsics[:, 0, 2].unsqueeze(-1)) / intrinsics[:, 0, 0].unsqueeze(-1)  # (u - cx) / fx
+    v_norm = (v - intrinsics[:, 1, 2].unsqueeze(-1)) / intrinsics[:, 1, 1].unsqueeze(-1)  # (v - cy) / fy
+
+    # repeat 2nd dimension (all ray points correspond to same (u,v)-pixel)
+    u_repeated = u_norm.unsqueeze(-1).repeat(1, 1, z.shape[2])  # (B, num_samples, N+M+1)
+    v_repeated = v_norm.unsqueeze(-1).repeat(1, 1, z.shape[2])  # (B, num_samples, N+M+1)
+
+    # compute the corresponding 3D coordinates in the camera space
+    x = u_repeated * z
+    y = v_repeated * z
+
+    # (B, num_samples, N+M+1) -> (B, num_samples*N+M+1)
+    n_points = num_samples * (N + M + 1)
+    x = x.view(B, n_points)
+    y = y.view(B, n_points)
+    z = z.view(B, n_points)
+
+    xyz_camera = torch.stack((x, y, z), dim=-1)  # (B, n_points, 3)
+
+    # convert points to homogeneous coordinates
+    xyz_camera_hom = torch.cat((xyz_camera, torch.ones(B, n_points, 1, device=device)), dim=-1)  # (B, n_points, 4)
+
+    # transform from camera to world coordinates
+    xyz_world_hom = torch.bmm(poses, xyz_camera_hom.permute(0, 2, 1)).permute(0, 2, 1)  # (B, n_points, 4)
+
+    # convert back to cartesian coordinates
+    xyz_world = xyz_world_hom[:, :, :3] / xyz_world_hom[:, :, 3:] # (B, n_points, 3)
+
+    return xyz_world
+
+
 # for renderer
 def get_sphere_intersection(cam_loc, ray_directions, r = 1.0):
     # Input: n_images x 4 x 4 ; n_images x n_rays x 3

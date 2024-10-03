@@ -49,7 +49,6 @@ model:
       plane_resolution: 128
       unet_kwargs:
         depth: 3
-  num_points: 512
 
   mlp:
     d_out_sem: 1
