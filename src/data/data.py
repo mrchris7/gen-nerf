@@ -450,7 +450,7 @@ class ScenesSequencesDataset(torch.utils.data.Dataset):
     def calculate_start_idxs(self, num_scene_frames, num_sequences):
         if self.sequence_locations == 'free':
             # freely select sequences across all frames (with potential overlap)
-            num_start_idxs = num_scene_frames-self.sequence_length
+            num_start_idxs = num_scene_frames-self.sequence_length+1
             free_idxs = np.random.choice(num_start_idxs, num_sequences, replace=False)
             return free_idxs
         
@@ -501,7 +501,7 @@ class ScenesSequencesDataset(torch.utils.data.Dataset):
             selected_idxs = torch.multinomial(sequence, self.num_frames)
             return np.array(sequence[selected_idxs].int())
         elif self.frame_locations=='evenly_spaced':
-            selected_idxs = np.linspace(low, high, num=self.num_frames).astype(int)
+            selected_idxs = np.linspace(low, high-1, num=self.num_frames).astype(int)
             np.random.shuffle(selected_idxs)
             return selected_idxs
         else:

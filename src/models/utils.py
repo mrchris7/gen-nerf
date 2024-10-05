@@ -785,6 +785,16 @@ def get_grid_coordinates(nx, ny, nz, volume_size, device):
     return grid_xyz
 
 
+def get_corner_coordinates(volume_size, device):
+    # i.e. volume_size = [ 8.   10.    2.56]
+    x_values = torch.tensor([0, volume_size[0]], device=device)
+    y_values = torch.tensor([0, volume_size[1]], device=device)
+    z_values = torch.tensor([0, volume_size[2]], device=device)
+
+    corner_xyz = torch.cartesian_prod(x_values, y_values, z_values)
+    return corner_xyz
+
+
 def backproject(voxel_dim, voxel_size, origin, projection, features):
     """ Takes 2d features and fills them along rays in a 3d volume
 

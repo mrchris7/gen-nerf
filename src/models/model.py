@@ -306,15 +306,17 @@ class GenNerf(L.LightningModule):
         pred = outputs['tsdf']  # [B, N, 1]
         trgt = targets['tsdf']  # [B, N, 1]
         
-        mask_observed = trgt < 1
-        mask_outside  = (trgt == 1).all(-1, keepdim=True)
+        #mask_observed = trgt < 1
+        #mask_outside  = (trgt == 1).all(-1, keepdim=True)
         
         if self.cfg.tsdf_loss.log_transform: # breaks gradient for eikonal loss calculation
             pred = smooth_log_transform(pred, self.cfg.tsdf_loss.log_transform_shift, self.cfg.tsdf_loss.log_transform_beta)
             trgt = smooth_log_transform(trgt, self.cfg.tsdf_loss.log_transform_shift, self.cfg.tsdf_loss.log_transform_beta)
 
         loss = F.l1_loss(pred, trgt, reduction='none') * self.cfg.tsdf_loss.weight
-        loss = loss[mask_observed | mask_outside].mean()
+        #loss = loss[mask_observed | mask_outside]
+        loss = loss.mean()
+        
         return loss
 
     '''
@@ -481,6 +483,7 @@ class GenNerf(L.LightningModule):
         volume_size = self.cfg.voxel_size * np.array(self.cfg.voxel_dim_test)
         print("vol-dims:", nx, ny, nz)
         print("vol-size:", volume_size)
+        corner_xyz = get_corner_coordinates(volume_size, device=device)  # TODO: take grid_origin into account!
         grid_xyz = get_grid_coordinates(nx, ny, nz, volume_size, device=device)  # (nx, ny, nz, 3)
         grid_xyz = grid_xyz.reshape(-1, 3)  # (N, 3)
         grid_xyz = grid_xyz.unsqueeze(0)  # (B=1, N, 3)
@@ -508,6 +511,7 @@ class GenNerf(L.LightningModule):
         self.debug_logger.log_tensor('test_tsdf', 'test_trgt_tsdf', tsdf_trgt)
         self.debug_logger.log_mesh('test_mesh', 'test_pred_mesh', pred_mesh)
         self.debug_logger.log_mesh('test_mesh', 'test_trgt_mesh', trgt_mesh)
+        self.debug_logger.log_tensor("test_mesh", "corner_points", corner_xyz)
         #self.debug_logger.log_tensor("test_mesh", "grid_points", grid_xyz)
 
         return #total_loss['combined']
@@ -565,7 +569,7 @@ class GenNerf(L.LightningModule):
 
             if mode=='test':
                 #xyz = get_3d_points(image, depth, projection)                
-                #self.debugger.log_tensor('frustum_sampling', f'all_points_{i}', xyz)
+                #self.debug_logger.log_tensor('frustum_sampling', f'all_points_{i}', xyz)
                 self.debug_logger.log_tensor('frustum_sampling', f'sampled_points_{i}', sampled_xyz)
                 self.debug_logger.log_tensor('frustum_sampling', f'pose_{i}', pose)
                 self.debug_logger.log_tensor('frustum_sampling', f'intrinsics_{i}', intrinsics)
