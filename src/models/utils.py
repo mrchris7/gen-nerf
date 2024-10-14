@@ -774,7 +774,7 @@ def log_image_to_wandb(image_tensor, name):
     wandb.log({name: wandb.Image(img)})
 
 
-def get_grid_coordinates(nx, ny, nz, volume_size, device):
+def get_grid_coordinates(nx, ny, nz, volume_size, origin, device):
     x = torch.linspace(0, volume_size[0], nx, device=device)
     y = torch.linspace(0, volume_size[1], ny, device=device)
     z = torch.linspace(0, volume_size[2], nz, device=device)
@@ -782,16 +782,17 @@ def get_grid_coordinates(nx, ny, nz, volume_size, device):
 
     # stack the grid coordinates and reshape to match input shape (B, N, 3)
     grid_xyz = torch.stack([grid_x, grid_y, grid_z], dim=-1)  # (nx, ny, nz, 3)
+    #grid_xyz = grid_xyz + origin.to(device)
     return grid_xyz
 
-
-def get_corner_coordinates(volume_size, device):
+def get_corner_coordinates(volume_size, origin, device):
     # i.e. volume_size = [ 8.   10.    2.56]
     x_values = torch.tensor([0, volume_size[0]], device=device)
     y_values = torch.tensor([0, volume_size[1]], device=device)
     z_values = torch.tensor([0, volume_size[2]], device=device)
 
     corner_xyz = torch.cartesian_prod(x_values, y_values, z_values)
+    #corner_xyz = corner_xyz + origin.to(device)
     return corner_xyz
 
 
@@ -817,6 +818,7 @@ def backproject(voxel_dim, voxel_size, origin, projection, features):
 
     B = features.size(0)
     C = features.size(1)
+    #print("***d_vol:", C)
     device = features.device
     nx, ny, nz = voxel_dim
 
@@ -845,7 +847,7 @@ def backproject(voxel_dim, voxel_size, origin, projection, features):
     return volume, valid
 
 
-def trilinear_interpolation(voxel_volume, xyz, origin, voxel_size):
+def trilinear_interpolation(voxel_volume, xyz, origin, voxel_size, mode='bilinear'):
     """
     Perform trilinear interpolation to map 3D world points to features in the voxel volume.
     
@@ -881,7 +883,7 @@ def trilinear_interpolation(voxel_volume, xyz, origin, voxel_size):
     voxel_volume = voxel_volume.permute(0, 4, 3, 2, 1)  # (B, nx, ny, nz, C) -> (N, C, D, H, W)
     samples = xyz_norm.view(B, N, 1, 1, 3)  # (B, N, 1, 1, 3)
     '''
-    features = F.grid_sample(voxel_volume, samples, mode='bilinear', align_corners=True, padding_mode='border')
+    features = F.grid_sample(voxel_volume, samples, mode=mode, align_corners=True, padding_mode='border')
     #features = grid_sample_3d(voxel_volume, samples)
     #print("features_old", features_old.shape)
     #print("features_new", features_new.shape)
@@ -889,6 +891,44 @@ def trilinear_interpolation(voxel_volume, xyz, origin, voxel_size):
     features = features.view(B, C, N).permute(0, 2, 1)  # (B, C, N) -> (B, N, C)
     
     return features
+
+
+def trilinear_interpolation_suboptimal(voxel_volume, xyz, origin, voxel_size):
+    """
+    Perform trilinear interpolation to map 3D world points to features in the voxel volume.
+    
+    Args:
+        voxel_volume (B, nx, ny, nz, C): voxel volume
+        xyz (B, N, 3): 3D world points
+        origin (3,): world coordinates of voxel (0, 0, 0)
+        voxel_size: size of each voxel
+    
+    Returns:
+        features (B, N, C): interpolated features
+    """
+    B, nx, ny, nz, C = voxel_volume.shape
+    N = xyz.shape[1]
+    device = voxel_volume.device
+
+    # normalize world positions xyz between -1 and 1
+    xyz = xyz - origin.to(device)
+    xyz = xyz / torch.tensor([nx, ny, nz]).to(device) * voxel_size
+    xyz = 2 * xyz - 1
+    xyz = xyz.float()
+    
+    voxel_volume = voxel_volume.permute(0, 4, 3, 2, 1)  # (N, C, D_in, H_in, W_in)  # TODO: check if D=nx, H=ny, W=nz
+
+    features = torch.empty(B, N, C).to(device)
+    for batch in range(B):
+        feat = torch.empty(N, C).to(device)
+        for i in range(N):
+            sample = torch.reshape(xyz[batch, i], [1, 1, 1, 1, 3])  # (N, D_, H_, W_, 3)
+            f = F.grid_sample(voxel_volume, sample, 'bilinear', align_corners=True)
+            feat[i] = f.squeeze()
+        features[batch] = feat
+
+    return features
+
 
 '''
 # use this if spatial net is used also -> else: CUDA OUT OF MEMORY

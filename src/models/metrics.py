@@ -43,9 +43,11 @@ def eval_tsdf(file_pred, file_trgt):
     # TODO: verify align corners when we need to do interpolation (non integer
     # voxel shifts)
     shift = (tsdf_trgt.origin - tsdf_pred.origin) / tsdf_trgt.voxel_size
+    print("tsdf_trgt.origin", tsdf_trgt.origin)
+    print("tsdf_pred.origin", tsdf_pred.origin)
     assert torch.allclose(shift, shift.round())
-    tsdf_pred = tsdf_pred.transform(voxel_dim=list(tsdf_trgt.tsdf_vol.shape),
-                                    origin=tsdf_trgt.origin, align_corners=True)
+    #tsdf_pred = tsdf_pred.transform(voxel_dim=list(tsdf_trgt.tsdf_vol.shape),
+    #                                origin=tsdf_trgt.origin, align_corners=True)
 
     metrics = {'l1': l1(tsdf_pred, tsdf_trgt)}
     return metrics

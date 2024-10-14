@@ -42,7 +42,8 @@ class GenNerf(L.LightningModule):
             self.code = PositionalEncoding.from_conf(cfg.code, d_in=d_in)
             d_in = self.code.d_out
 
-        self.mlp = ResnetFC.from_conf(cfg.mlp, d_in=d_in, d_latent=encoder_latent)
+        #self.mlp = ResnetFC.from_conf(cfg.mlp, d_in=d_in, d_latent=encoder_latent)
+        self.mlp = ResnetFC.from_conf(cfg.mlp, d_in=encoder_latent, d_latent=d_in)
         #self.head_geo = TSDFHead(cfg.head_geo, cfg.backbone3d.channels, cfg.voxel_size)  # # simpler head required that regresses tsdf-value from feature of point (instead of feature of whole volume)
         self.head_geo = TSDFHeadSimple(cfg.mlp.d_out_geo)
         
@@ -52,7 +53,7 @@ class GenNerf(L.LightningModule):
 
         self.initialize_volume()
 
-        self.debug_logger = DebugLogger(cfg.debug_dir)
+        self.debug_logger = DebugLogger(cfg.debug_dir, cfg.debug_tag)
         self.debug_logger.clear_data()
 
     def initialize_volume(self):
@@ -135,9 +136,10 @@ class GenNerf(L.LightningModule):
                 #sparse_xyz = self.normalizer(sparse_xyz)  # TODO: normalize?
                 accum_sparse_xyz = torch.cat((accum_sparse_xyz, sparse_xyz), dim=1)
 
-        if mode == 'test':
-            self.debug_logger.log_tensor("sparse_points", "sparse_points", accum_sparse_xyz)
-            self.debug_logger.log_tensor("sparse_points", "dense_points", xyz)
+        if mode == 'test' and self.cfg.encoder.use_pointnet:
+            #self.debug_logger.log_tensor("sparse_points", "sparse_points", accum_sparse_xyz)
+            #self.debug_logger.log_tensor("sparse_points", "dense_points", xyz)
+            pass
 
         # build volume using PointNet (currently it does not support dynamic accumulation)
         if self.cfg.encoder.use_pointnet:
@@ -149,8 +151,8 @@ class GenNerf(L.LightningModule):
         xy = normalize_coordinate(p.clone(), plane=plane, padding=self.cfg.encoder.pointnet.padding) # normalize to the range of (0, 1)
         xy = xy[:, :, None].float()
         vgrid = 2.0 * xy - 1.0 # normalize to (-1, 1)
-        #c_check = F.grid_sample(c, vgrid, padding_mode='border', align_corners=True, mode=self.cfg.encoder.pointnet.sample_mode).squeeze(-1)
-        c = grid_sample_2d(c, vgrid)
+        c = F.grid_sample(c, vgrid, padding_mode='border', align_corners=True, mode=self.cfg.encoder.pointnet.sample_mode).squeeze(-1)
+        #c = grid_sample_2d(c, vgrid)  # ONLY FOR: eikonal
         #assert(c_check.shape == c.shape)
         #assert(torch.allclose(c_check, c, atol=1e-3, rtol=1e-4))
         return c
@@ -226,7 +228,10 @@ class GenNerf(L.LightningModule):
                 xyz = self.code(xyz)
                 xyz = xyz.reshape(B, N, -1)
 
-            mlp_input = torch.cat((feat, xyz), dim=-1)
+            #mlp_input = torch.cat((feat, xyz), dim=-1)
+            #print("xyz_shape", xyz.shape)
+            #print("feat_shape", feat.shape)
+            mlp_input = torch.cat((xyz, feat), dim=-1)
             mlp_output = self.mlp(mlp_input)
             mlp_output = mlp_output.reshape(B, N, d_out_geo + d_out_sem)
 
@@ -284,7 +289,7 @@ class GenNerf(L.LightningModule):
         return optimizers, schedulers
     
     
-    def postprocess(self, tsdf_vol):
+    def postprocess(self, tsdf_vol, origin):
         """ Wraps the network output into a TSDF data structure
         
         Args:
@@ -297,7 +302,7 @@ class GenNerf(L.LightningModule):
         batch_size = len(tsdf_vol)
 
         for i in range(batch_size):
-            tsdf = TSDF(self.cfg.voxel_size, self.origin, tsdf_vol[i].squeeze(0))
+            tsdf = TSDF(self.cfg.voxel_size, origin, tsdf_vol[i].squeeze(0))
             tsdf_data.append(tsdf)
 
         return tsdf_data
@@ -307,14 +312,15 @@ class GenNerf(L.LightningModule):
         trgt = targets['tsdf']  # [B, N, 1]
         
         #mask_observed = trgt < 1
-        #mask_outside  = (trgt == 1).all(-1, keepdim=True)
+        #mask_outside  = (trgt == 1).all(-1, keepdim=True) # does not work in our case (vertical column is equal to 1)
+                                                           # because trgt is not structured as a 3D grid but a point set
         
         if self.cfg.tsdf_loss.log_transform: # breaks gradient for eikonal loss calculation
             pred = smooth_log_transform(pred, self.cfg.tsdf_loss.log_transform_shift, self.cfg.tsdf_loss.log_transform_beta)
             trgt = smooth_log_transform(trgt, self.cfg.tsdf_loss.log_transform_shift, self.cfg.tsdf_loss.log_transform_beta)
 
         loss = F.l1_loss(pred, trgt, reduction='none') * self.cfg.tsdf_loss.weight
-        #loss = loss[mask_observed | mask_outside]
+        #loss = loss[mask_observed | mask_outside]  # penalize observed areas and areas behind walls (outside) to prevent artifacts behind walls
         loss = loss.mean()
         
         return loss
@@ -421,6 +427,9 @@ class GenNerf(L.LightningModule):
         return losses
 
     def log_loss(self, loss, B, mode):
+        if len(loss.keys()) == 0:
+            return
+
         self.log(f'{mode}_loss_tsdf', loss['tsdf'], batch_size=B, sync_dist=True)
         self.log(f'{mode}_loss', loss['combined'], batch_size=B, sync_dist=True)
         
@@ -444,6 +453,7 @@ class GenNerf(L.LightningModule):
             #print("train rand:", np.random.random(1))
         '''
 
+        #self.origin = batch['origin']
         total_loss = self.process_step(batch, 'train')
         B = batch['image'].shape[0]
         self.log_loss(total_loss, B, 'train')
@@ -458,19 +468,25 @@ class GenNerf(L.LightningModule):
             L.seed_everything(1, workers=True)
             #print("val rand:", np.random.random(1))
         '''
-        
+        #self.origin = batch['origin']
         total_loss = self.process_step(batch, 'val')
 
         B = batch['image'].shape[0]
         self.log_loss(total_loss, B, 'val')
 
+        # TODO: better printing -> use configs i.e. use_pointnet
+        #grad_mlp = self.print_average_gradients(self.mlp)
+        #self.log(f'avg_grad_mlp', grad_mlp, batch_size=B, sync_dist=True)
+        #grad_pointnet = self.print_average_gradients(self.pointnet)
+        #self.log(f'avg_grad_pointnet', grad_pointnet, batch_size=B, sync_dist=True)
+
         return total_loss['combined']
 
     def test_step(self, batch, batch_idx):
+        #self.origin = batch['origin']
         B = batch['image'].shape[0]
         device = batch['image'].device
 
-        # loss not working due to missing grad_fn during training mode
         total_loss = self.process_step(batch, 'test')
         self.log_loss(total_loss, B, 'test')
 
@@ -483,8 +499,9 @@ class GenNerf(L.LightningModule):
         volume_size = self.cfg.voxel_size * np.array(self.cfg.voxel_dim_test)
         print("vol-dims:", nx, ny, nz)
         print("vol-size:", volume_size)
-        corner_xyz = get_corner_coordinates(volume_size, device=device)  # TODO: take grid_origin into account!
-        grid_xyz = get_grid_coordinates(nx, ny, nz, volume_size, device=device)  # (nx, ny, nz, 3)
+        print("self.origin:", self.origin)
+        corner_xyz = get_corner_coordinates(volume_size, self.origin, device=device)
+        grid_xyz = get_grid_coordinates(nx, ny, nz, volume_size, self.origin, device=device)  # (nx, ny, nz, 3)
         grid_xyz = grid_xyz.reshape(-1, 3)  # (N, 3)
         grid_xyz = grid_xyz.unsqueeze(0)  # (B=1, N, 3)
         #grid_points = grid_points.repeat(B, 1, 1)  # (B, N, 3)  # opt. repeat B times
@@ -495,8 +512,8 @@ class GenNerf(L.LightningModule):
         tsdf_pred = tsdf_pred.reshape(B, nx, ny, nz)  # (B, nx, ny, nz)
         
         # get meshes
-        pred_tsdfs = self.postprocess(tsdf_pred)
-        trgt_tsdfs = self.postprocess(tsdf_trgt)
+        pred_tsdfs = self.postprocess(tsdf_pred, self.origin) # batch['origin']
+        trgt_tsdfs = self.postprocess(tsdf_trgt, self.origin) # batch['origin']
 
         pred_mesh = pred_tsdfs[0].get_mesh()
         trgt_mesh = trgt_tsdfs[0].get_mesh()
@@ -507,12 +524,16 @@ class GenNerf(L.LightningModule):
         #log_image_to_wandb(batch['image'][0, 0, :, :, :], 'test_image')
 
         # Log to disk (for debugging)
-        self.debug_logger.log_tensor('test_tsdf', 'test_pred_tsdf', tsdf_pred)
-        self.debug_logger.log_tensor('test_tsdf', 'test_trgt_tsdf', tsdf_trgt)
-        self.debug_logger.log_mesh('test_mesh', 'test_pred_mesh', pred_mesh)
-        self.debug_logger.log_mesh('test_mesh', 'test_trgt_mesh', trgt_mesh)
-        self.debug_logger.log_tensor("test_mesh", "corner_points", corner_xyz)
-        #self.debug_logger.log_tensor("test_mesh", "grid_points", grid_xyz)
+        #self.debug_logger.log_tensor('test_tsdf', 'test_pred_tsdf', tsdf_pred)
+        #self.debug_logger.log_tensor('test_tsdf', 'test_trgt_tsdf', tsdf_trgt)
+        tsdf_pred_file = self.debug_logger.log_tsdf('test_tsdf', 'test_pred_tsdf', pred_tsdfs[0])
+        tsdf_trgt_file = self.debug_logger.log_tsdf('test_tsdf', 'test_trgt_tsdf', trgt_tsdfs[0])
+
+        mesh_pred_file = self.debug_logger.log_mesh('test_mesh', 'test_pred_mesh', pred_mesh)
+        mesh_trgt_file = self.debug_logger.log_mesh('test_mesh', 'test_trgt_mesh', trgt_mesh)
+        corner_points_file = self.debug_logger.log_tensor("test_mesh", "corner_points", corner_xyz)
+        #grid_points_file = self.debug_logger.log_tensor("test_mesh", "grid_points", grid_xyz)
+
 
         return #total_loss['combined']
 
@@ -582,7 +603,11 @@ class GenNerf(L.LightningModule):
             targets = {}
             targets['tsdf'] = trilinear_interpolation(tsdf_vol.permute(0, 2, 3, 4, 1), sampled_xyz, self.origin.squeeze(), self.cfg.voxel_size)
             targets['sampled_xyz'] = sampled_xyz
-            loss = self.calculate_loss(outputs, targets)
+            if mode == 'test' and self.cfg.tsdf_loss.use_eikonal_reg:
+                # eikonal loss not working due to missing grad_fn during test mode
+                loss = {}
+            else:
+                loss = self.calculate_loss(outputs, targets)
             total_loss = add_dicts(total_loss, loss)
         #raise Exception()
         return total_loss

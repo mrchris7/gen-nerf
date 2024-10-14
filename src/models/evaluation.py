@@ -19,6 +19,7 @@ import argparse
 import json
 import os
 
+import cv2
 import numpy as np
 import pyrender
 import torch
@@ -106,8 +107,25 @@ def process(info_file, save_path, total_scenes_index, total_scenes_count):
         if i%25==0:
             print(total_scenes_index, total_scenes_count,scene, i, len(dataloader))
 
-        depth_trgt = d['depth'].numpy()
+        depth_trgt = d['depth'].numpy()  # TODO: get this from rendering gt-mesh
         _, depth_pred = renderer(height, width, d['intrinsics'], d['pose'], mesh_opengl)
+        if i%100==0: # if i in [0, 101, 202, 303, 405, 506, 607, 709]:
+            depth_pred_norm = cv2.normalize(depth_pred, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
+            file_pred_i = os.path.join(save_path, f'eval_metrics/depth_pred_{i}.png')
+            cv2.imwrite(file_pred_i, depth_pred_norm)
+            
+            depth_trgt_norm = cv2.normalize(depth_trgt, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
+            file_trgt_i = os.path.join(save_path, f'eval_metrics/depth_trgt_{i}.png')
+            cv2.imwrite(file_trgt_i, depth_trgt_norm)
+            print('saved depth_pred_%04d'%i)
+
+            ''' # use this to render mesh color images from same perspective...
+            color_image = image[batch, :, :, :].cpu().numpy()
+            color_image = np.transpose(color_image, (1, 2, 0))  # convert CHW to HWC
+            color_image = cv2.normalize(color_image, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
+            color_image_bgr = cv2.cvtColor(color_image, cv2.COLOR_RGB2BGR) # convert to BGR
+            cv2.imwrite(f'{save_file}.png', color_image_bgr)
+            '''
 
         temp = eval_depth(depth_pred, depth_trgt)
         if i==0:
@@ -135,11 +153,12 @@ def process(info_file, save_path, total_scenes_index, total_scenes_count):
                      for key, value in metrics_depth.items()}
 
     # save trimed mesh
-    file_mesh_trim = os.path.join(save_path, 'test_mesh/test_mesh_trim.ply')
+    file_mesh_trim = os.path.join(save_path, 'test_mesh/test_trim_mesh.ply')
     tsdf_fusion.get_tsdf().get_mesh().export(file_mesh_trim)
 
     # eval tsdf
-    file_tsdf_trgt = dataset.info['file_name_vol_%02d'%voxel_size]
+    #file_tsdf_trgt = dataset.info['file_name_vol_%02d'%voxel_size]
+    file_tsdf_trgt = os.path.join(save_path, 'test_tsdf/test_trgt_tsdf.npz')
     metrics_tsdf = eval_tsdf(file_tsdf_pred, file_tsdf_trgt)
 
     # eval trimed mesh
@@ -149,7 +168,7 @@ def process(info_file, save_path, total_scenes_index, total_scenes_count):
     metrics = {**metrics_depth, **metrics_mesh, **metrics_tsdf}
     print(metrics)
 
-    rslt_file = os.path.join(save_path, '%s_metrics.json'%scene)
+    rslt_file = os.path.join(save_path, 'eval_metrics/%s_metrics.json'%scene)
     json.dump(metrics, open(rslt_file, 'w'))
 
     return scene, metrics
@@ -158,7 +177,7 @@ def process(info_file, save_path, total_scenes_index, total_scenes_count):
 
 def main():
     parser = argparse.ArgumentParser(description="GenNerf Testing")
-    parser.add_argument("--model", default='/home/atuin/g101ea/g101ea13/debug', metavar="FILE",
+    parser.add_argument("--result", default='logs', metavar="FOLDER",
                         help="path to debug folder")
     parser.add_argument("--scenes", default="/home/atuin/g101ea/g101ea13/data/scannet/scans/scene0244_01/info.json",
                         help="which scene(s) to run on")
@@ -172,9 +191,9 @@ def main():
 
     metrics = {}
     for i, info_file in enumerate(info_files):
-        print("i", i, " infor_file:", info_file)
+        print("i", i, " info_file:", info_file)
         # run model on each scene
-        scene, temp = process(info_file, args.model, i, len(info_files))
+        scene, temp = process(info_file, f"/home/atuin/g101ea/g101ea13/debug/{args.result}", i, len(info_files))
         metrics[scene] = temp
 
     print(metrics)

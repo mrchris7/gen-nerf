@@ -132,8 +132,11 @@ def map_tsdf(info, data, voxel_types, voxel_sizes):
 
     if len(voxel_types)>0:
         for scale in voxel_sizes:
-            data['vol_%02d'%scale] = TSDF.load(info['file_name_vol_%02d'%scale],
-                                               voxel_types)
+            #print("key:", 'file_name_vol_%02d'%scale)
+            #print("load tsdf:", info['file_name_vol_%02d'%scale])
+            tsdf = TSDF.load(info['file_name_vol_%02d'%scale], voxel_types)
+            data['vol_%02d'%scale] = tsdf
+            #data['origin'] = tsdf.origin.squeeze()
     return data
 
 def open_from_archive(full_path):
@@ -305,7 +308,7 @@ class ScenesDataset(torch.utils.data.Dataset):
         info = load_info_json(self.info_files[i])
 
         frame_ids = self.get_frame_ids(info)
-        # print(frame_ids)
+        #print(frame_ids)
         frames = [map_frame(info['frames'][i], self.frame_types)
                   for i in frame_ids]  # TODO: move loop into extraction process to only open tar-file only once
 
@@ -342,6 +345,7 @@ class ScenesSequencesDataset(torch.utils.data.Dataset):
 
     def __init__(self, info_files, sequence_amount, sequence_length, sequence_locations,
                  sequence_order, num_frames, frame_locations, frame_order,
+                 #num_keyframes, keyframes, num_keyframes_select,
                  transform=None, frame_types=[], voxel_types=[], voxel_sizes=[]):
         """
         Args:
@@ -371,16 +375,22 @@ class ScenesSequencesDataset(torch.utils.data.Dataset):
         self.frame_types = frame_types
         self.voxel_types = voxel_types
         self.voxel_sizes = voxel_sizes
+
+        #self.num_keyframes = num_keyframes
+        #self.keyframes = keyframes
+        #self.num_keyframe_select = num_keyframes_select
         
         start_idxs_list = []
         num_sequences_list = []
+        keyframes_list = []
         delete_scenes_idxs = []
         for i, info_file in enumerate(self.info_files):
             # calculate num sequences for each scene
             info = load_info_json(info_file)
             num_scene_frames = len(info['frames'])
             num_sequences = int(self.sequence_amount * (num_scene_frames / self.sequence_length))
-            #print("num_seq", num_sequences)
+            print("num_scene_frames", num_scene_frames)
+            print("num_sequences", num_sequences)
 
             if num_scene_frames < self.sequence_length:
                 # exclude scenes that have not enough frames
@@ -403,6 +413,16 @@ class ScenesSequencesDataset(torch.utils.data.Dataset):
 
             start_idxs_list.append(start_idxs)
 
+            '''
+            # create keyframe set:
+            if self.num_keyframes == 1:
+                evenly_spaced_keyframes = np.array([num_scene_frames//2])  # select middle frame
+            else:
+                evenly_spaced_keyframes = np.linspace(0, num_scene_frames, num=self.num_keyframes).astype(int)
+            np.random.shuffle(evenly_spaced_keyframes)
+            keyframes_list.append(evenly_spaced_keyframes)
+            '''
+
         # exclude scenes that have not enough frames
         for i in sorted(delete_scenes_idxs, reverse=True):
             info = load_info_json(self.info_files[i])
@@ -411,6 +431,7 @@ class ScenesSequencesDataset(torch.utils.data.Dataset):
 
         self.num_sequences_list = num_sequences_list
         self.start_idxs_list = start_idxs_list
+        self.keyframes_list = keyframes_list
 
     def __len__(self):
         return sum(self.num_sequences_list)
@@ -696,3 +717,80 @@ class OneSceneDataset(torch.utils.data.Dataset):
     def get_mesh(self):
         # TODO: also get vertex instances/semantics
         return trimesh.load(self.info['file_name_mesh_gt'], process=False)
+
+'''
+# not finished yet
+class SceneSequenceDataset(torch.utils.data.Dataset):
+    """Pytorch Dataset for multiple frames in a single scene. getitem loads individual frames"""
+
+    def __init__(self, info_file, transform=None, frame_types=[],
+                 voxel_types=[], voxel_sizes=[], frames=[], prepare=False):
+        """
+        Args:
+            info_file: path to json file (format described in datasets/README)
+            transform: transform object to preprocess data
+            frame_types: which images to load (ex: depth, semseg, etc)
+            voxel_types: list of voxel attributes to load with the TSDF
+            voxel_sizes: list of voxel sizes to load
+            num_frames: number of evenly spaced frames to use (-1 for all)
+        """
+
+        self.info = load_info_json(info_file)
+        self.transform = transform
+        self.frame_types = frame_types
+        self.voxel_types = voxel_types
+        self.voxel_sizes = voxel_sizes
+        self.prepare = prepare
+
+        self.info['frames'] = [self.info['frames'][i] for i in frames]
+
+
+    def __len__(self):
+        return len(self.info['frames'])
+
+    def __getitem__(self, i):
+        """
+        Returns:
+            dict of meta data and images for a single frame
+        """
+
+        frame = map_frame(self.info['frames'][i], self.frame_types, self.prepare)
+
+        # put data in common format so we can apply transforms
+        data = {'dataset': self.info['dataset'],
+                #'instances': self.info['instances'],
+                'frames': [frame]}
+        data = map_tsdf(self.info, data, self.voxel_types, self.voxel_sizes)
+
+        if self.transform is not None:
+            data = self.transform(data)
+        # remove data from common format and return the single frame
+        #data = data['frames'][0]
+
+        return data
+
+    def get_tsdf(self):
+        """
+        Returns:
+            dict with TSDFs
+        """
+
+        # put data in common format so we can apply transforms
+        data = {'dataset': self.info['dataset'],
+                #'instances': self.info['instances'],
+                'frames': [],
+               }
+
+        # load tsdf volumes
+        data = map_tsdf(self.info, data, self.voxel_types, self.voxel_sizes)
+
+        # apply transforms
+        if self.transform is not None:
+            data = self.transform(data)
+
+        return data
+
+    def get_mesh(self):
+        # TODO: also get vertex instances/semantics
+        return trimesh.load(self.info['file_name_mesh_gt'], process=False)
+'''
