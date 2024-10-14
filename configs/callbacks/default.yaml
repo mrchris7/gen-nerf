@@ -3,6 +3,7 @@ defaults:
   - none #early_stopping  # deactivated
   - none #model_summary  # deactivated
   - rich_progress_bar
+  - clear_cache
   - _self_
 
 model_checkpoint:

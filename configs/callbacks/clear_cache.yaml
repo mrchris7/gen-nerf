@@ -1,0 +1,3 @@
+
+clear_cache:
+  _target_: src.utils.clear_cache_cb.CudaClearCacheCallback

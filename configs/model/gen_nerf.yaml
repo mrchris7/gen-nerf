@@ -14,6 +14,7 @@ teacher:
   none: none
 
 debug_dir: ${paths.debug_dir}
+debug_tag: ''
 voxel_size: ${data.voxel_size}
 voxel_dim_train: ${data.voxel_dim_train}
 voxel_dim_val: ${data.voxel_dim_val}
@@ -56,7 +57,7 @@ encoder:
     dim: 3
     padding: 0.1
     hidden_dim: 32
-    scatter_type: 'max'  # or 'min'
+    scatter_type: 'max'  # or 'mean'
     plane_type: ['xz', 'xy', 'yz']
     plane_resolution: 128
     n_blocks: 5
@@ -73,14 +74,14 @@ mlp:
   d_out_geo: 32  # geometric feature -> tsdf
   n_blocks: 5
   d_hidden: 512
-  combine_layer: 3
+  combine_layer: 1000 # prev 3
   combine_type: average
   beta: 0.0
   use_spade: False
 
 use_code: True # positional encoding
 code:
-  num_freqs: 6 # also good 2 with freqfactor=1.5 
+  num_freqs: 2 # also good 2 with freqfactor=1.5 
   freq_factor: 0.5 # 1.5
   include_input: True
 

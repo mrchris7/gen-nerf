@@ -16,20 +16,21 @@ defaults:
 
 tags: ['dev', 'cluster', 'one_scene_seqs', 'only_tsdf']
 
-seed: 1
+seed: 0  # weight0.01 -> not 0(not bad but suboptimal), 1, 2, weight0.001 -> 0 is good
 
 trainer:
   devices: 1
   num_nodes: 1
-  min_epochs: 300 # 300
-  max_epochs: 300 # 300
+  min_epochs: 500 # 300
+  max_epochs: 500 # 300
   log_every_n_steps: 1
   check_val_every_n_epoch: 10
   #gradient_clip_val: 0.5
 
 model:
+  debug_tag: 'eikonal'
   optimizer:
-    lr: 0.0001  # todo: <=0.00001
+    lr: 0.0001 # still not working with 0.00001, 0.000001 (and weight 0.01)
     weight_decay: 0.0001
   scheduler:
     step_size: 400
@@ -55,6 +56,8 @@ model:
     d_out_geo: 64
     n_blocks: 5
     beta: 0.0
+    d_hidden: 256  # new line
+    combine_layer: 1000 # new line
   
   use_code: True
   code:
@@ -71,9 +74,9 @@ model:
     smoothness_reg:
       weight: 0.1
       k: 3
-    use_eikonal_reg: False
+    use_eikonal_reg: True # for eikonal
     eikonal_reg:
-      weight: 0.01
+      weight: 0.001  # not woring with 0.01
 
 data:
   datasets_train: ['/scans/scene0244_01/info.json'] # scene0244_01
@@ -95,9 +98,9 @@ data:
   frame_locations: 'evenly_spaced'  # 'random' or 'evenly_spaced'
   frame_order: 'random'  # 'random' or 'sorted'
   voxel_size: .04
-  voxel_dim_train: [200, 180, 50] # [160, 160, 64]
-  voxel_dim_val: [200, 180, 50] # [256, 256, 96]
-  voxel_dim_test: [200, 180, 50] # [416, 416, 128
+  voxel_dim_train: [190, 180, 50] # [160, 160, 64]
+  voxel_dim_val: [190, 180, 50] # [256, 256, 96]
+  voxel_dim_test: [190, 180, 50] # [416, 416, 128
 
   # debug:
   random_rotation_3d: false
