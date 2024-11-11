@@ -53,9 +53,6 @@ class GenNerf(L.LightningModule):
 
         self.initialize_volume()
 
-        self.debug_logger = DebugLogger(cfg.debug_dir, cfg.debug_tag)
-        self.debug_logger.clear_data()
-
     def initialize_volume(self):
         """ Reset the accumulators.
         
@@ -79,7 +76,7 @@ class GenNerf(L.LightningModule):
     def encode(self, projection, image, depth, mode):
         """ Encodes image and corresponding pointcloud into a 3D feature volume and 
         accumulates them. This is the first half of the network which
-        is run on F frames.
+        is run on T frames.
 
         Args:
             projection: (B, T, 4, 4) pose matrix
@@ -137,8 +134,8 @@ class GenNerf(L.LightningModule):
                 accum_sparse_xyz = torch.cat((accum_sparse_xyz, sparse_xyz), dim=1)
 
         if mode == 'test' and self.cfg.encoder.use_pointnet:
-            #self.debug_logger.log_tensor("sparse_points", "sparse_points", accum_sparse_xyz)
-            #self.debug_logger.log_tensor("sparse_points", "dense_points", xyz)
+            #self.logger.local.log_tensor(accum_sparse_xyz, 'sparse_points/sparse_points')
+            #self.logger.local.log_tensor(xyz, 'sparse_points/dense_points')
             pass
 
         # build volume using PointNet (currently it does not support dynamic accumulation)
@@ -228,9 +225,6 @@ class GenNerf(L.LightningModule):
                 xyz = self.code(xyz)
                 xyz = xyz.reshape(B, N, -1)
 
-            #mlp_input = torch.cat((feat, xyz), dim=-1)
-            #print("xyz_shape", xyz.shape)
-            #print("feat_shape", feat.shape)
             mlp_input = torch.cat((xyz, feat), dim=-1)
             mlp_output = self.mlp(mlp_input)
             mlp_output = mlp_output.reshape(B, N, d_out_geo + d_out_sem)
@@ -519,21 +513,16 @@ class GenNerf(L.LightningModule):
         trgt_mesh = trgt_tsdfs[0].get_mesh()
 
         # log to wandb
-        #log_mesh_to_wandb(pred_mesh, 'test_pred_mesh')
-        #log_mesh_to_wandb(trgt_mesh, 'test_trgt_mesh')
-        #log_image_to_wandb(batch['image'][0, 0, :, :, :], 'test_image')
+        #self.logger.log_mesh(pred_mesh, 'test_pred_mesh')  # TODO: instead render images of mesh and log them
+        #self.logger.log_mesh(trgt_mesh, 'test_trgt_mesh')
 
-        # Log to disk (for debugging)
-        #self.debug_logger.log_tensor('test_tsdf', 'test_pred_tsdf', tsdf_pred)
-        #self.debug_logger.log_tensor('test_tsdf', 'test_trgt_tsdf', tsdf_trgt)
-        tsdf_pred_file = self.debug_logger.log_tsdf('test_tsdf', 'test_pred_tsdf', pred_tsdfs[0])
-        tsdf_trgt_file = self.debug_logger.log_tsdf('test_tsdf', 'test_trgt_tsdf', trgt_tsdfs[0])
-
-        mesh_pred_file = self.debug_logger.log_mesh('test_mesh', 'test_pred_mesh', pred_mesh)
-        mesh_trgt_file = self.debug_logger.log_mesh('test_mesh', 'test_trgt_mesh', trgt_mesh)
-        corner_points_file = self.debug_logger.log_tensor("test_mesh", "corner_points", corner_xyz)
-        #grid_points_file = self.debug_logger.log_tensor("test_mesh", "grid_points", grid_xyz)
-
+        # log locally (for debugging)
+        self.logger.local.log_tsdf(pred_tsdfs[0], f'test_tsdf/test_pred_tsdf')
+        self.logger.local.log_tsdf(trgt_tsdfs[0], f'test_tsdf/test_trgt_tsdf')
+        self.logger.local.log_mesh(pred_mesh, f'test_mesh/test_pred_mesh')
+        self.logger.local.log_mesh(trgt_mesh, f'test_mesh/test_trgt_mesh')
+        self.logger.local.log_tensor(corner_xyz, f'test_mesh/corner_points')
+        self.logger.local.log_tensor(grid_xyz, f'test_mesh/grid_points')
 
         return #total_loss['combined']
 
@@ -590,14 +579,14 @@ class GenNerf(L.LightningModule):
 
             if mode=='test':
                 #xyz = get_3d_points(image, depth, projection)                
-                #self.debug_logger.log_tensor('frustum_sampling', f'all_points_{i}', xyz)
-                self.debug_logger.log_tensor('frustum_sampling', f'sampled_points_{i}', sampled_xyz)
-                self.debug_logger.log_tensor('frustum_sampling', f'pose_{i}', pose)
-                self.debug_logger.log_tensor('frustum_sampling', f'intrinsics_{i}', intrinsics)
-                self.debug_logger.log_tensor('frustum_sampling', f'image_{i}', image)
-                self.debug_logger.log_tensor('frustum_sampling', f'depth_{i}', depth)
+                #self.logger.local.log_tensor(xyz, f'frustum_sampling/all_points_{i}')
+                self.logger.local.log_tensor(sampled_xyz, f'frustum_sampling/sampled_points_{i}')
+                self.logger.local.log_tensor(pose, f'frustum_sampling/pose_{i}')
+                self.logger.local.log_tensor(intrinsics, f'frustum_sampling/intrinsics_{i}')
+                self.logger.local.log_tensor(image, f'frustum_sampling/image_{i}')
+                self.logger.local.log_tensor(depth, f'frustum_sampling/depth_{i}')
             
-            #log_image_to_wandb(batch['image'][0, i, :, :, :], f'{mode}_image_{i}')
+            #self.logger.local.log_tensor(batch['image'][0, i, :, :, :], f'{mode}_image_{i}')
 
             outputs = self.forward(sampled_xyz)
             targets = {}

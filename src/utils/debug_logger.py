@@ -8,9 +8,9 @@ class DebugLogger:
 
     def __init__(self, dir, tag):
         if tag == '' or tag == None:
-            self.dir = f"{dir}/logs"  # default dir if no tag is provided
+            self.dir = os.path.join(dir, 'logs')  # default dir if no tag is provided
         else:
-            self.dir = f"{dir}/logs_{tag}"
+            self.dir = os.path.join(dir, f'logs_{tag}')
         if not os.path.exists(self.dir):
             os.makedirs(self.dir)
             
