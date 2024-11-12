@@ -4,7 +4,7 @@ defaults:
 #strategy: ddp
 strategy:
   _target_: lightning.pytorch.strategies.DDPStrategy
-  find_unused_parameters: true # pointnet: false  # spatial: true
+  find_unused_parameters: false # pointnet: false  # spatial: true
 
 accelerator: gpu
 devices: 1

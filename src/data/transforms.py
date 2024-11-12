@@ -279,7 +279,9 @@ class FlattenTSDF(object):
         for key in list(data.keys()):
             if key[:3]=='vol':
                 tsdf = data.pop(key)
+                #print("tsdf_vol", tsdf.tsdf_vol.shape) # [200, 250, 64] = voxel_dim_val
                 data['vol_'+key[4:]+'_tsdf'] = tsdf.tsdf_vol.unsqueeze(0)
+                #data['origin'] = tsdf.origin
                 for attr in tsdf.attribute_vols.keys():
                     data['vol_'+key[4:]+'_'+attr] = tsdf.attribute_vols[attr]
         return data

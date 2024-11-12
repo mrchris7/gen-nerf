@@ -1,5 +1,6 @@
 import warnings
 import pytorch_lightning as pl
+import torch
 import wandb
 from typing import Dict, List
 from lightning.pytorch.loggers import WandbLogger, Logger
@@ -42,6 +43,9 @@ def extras(cfg: DictConfig) -> None:
     if cfg.extras.get("print_config"):
         log.info("Printing config tree with Rich! <cfg.extras.print_config=True>")
         rich_utils.print_config_tree(cfg, resolve=True, save_to_file=True)
+
+    # trade-off precision for performance when using 
+    torch.set_float32_matmul_precision("high") # std: highest
 
 
 def task_wrapper(task_func: Callable) -> Callable:
