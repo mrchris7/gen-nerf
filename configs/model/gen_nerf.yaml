@@ -13,8 +13,6 @@ scheduler:
 teacher:
   none: none
 
-debug_dir: ${paths.debug_dir}
-debug_tag: ''
 voxel_size: ${data.voxel_size}
 voxel_dim_train: ${data.voxel_dim_train}
 voxel_dim_val: ${data.voxel_dim_val}

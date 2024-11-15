@@ -1,5 +1,5 @@
 defaults:
-  - gpu
+  - seqs
 
 datasets_train: ['scannet_living_train.txt']
 datasets_val: ['scannet_living_val.txt']

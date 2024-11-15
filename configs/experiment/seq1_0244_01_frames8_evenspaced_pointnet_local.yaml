@@ -1,0 +1,113 @@
+# @package _global_
+
+# to execute this experiment run:
+# python train.py experiment=train_tsdf_one_frame
+
+defaults:
+  - override /data: seqs
+  - override /model: gen_nerf
+  - override /callbacks: default
+  - override /logger: null
+  - override /trainer: gpu
+  - override /paths: default
+
+# all parameters below will be merged with parameters from default configurations set above
+# this allows you to overwrite only specified parameters
+
+tags: ['dev', 'local', 'one_scene_seqs', 'only_tsdf']
+
+seed: 0  # no 1
+
+trainer:
+  devices: 1
+  num_nodes: 1
+  min_epochs: 300 # 300
+  max_epochs: 300 # 300
+  log_every_n_steps: 1
+  check_val_every_n_epoch: 10
+  #gradient_clip_val: 0.5
+
+model:
+  optimizer:
+    lr: 0.0001
+    weight_decay: 0.0001
+  scheduler:
+    step_size: 400
+    gamma: 0.1
+  compile: false
+
+  encoder:
+    use_spatial: false
+    spatial:
+      backbone: 'resnet34'
+      use_first_pool: true
+    use_pointnet: true
+    pointnet:
+      num_sparse_points: 512
+      n_blocks: 4
+      c_dim: 64
+      plane_resolution: 128
+      unet_kwargs:
+        depth: 3
+
+  mlp:
+    d_out_sem: 1
+    d_out_geo: 64
+    n_blocks: 5
+    beta: 0.0
+    d_hidden: 256  # new line
+    combine_layer: 1000 # new line
+  
+  use_code: True
+  code:
+    num_freqs: 6 
+    freq_factor: 0.5
+    include_input: True
+
+  tsdf_loss:
+    weight: 1.0
+    log_transform: True
+    log_transform_shift: 15.0
+    log_transform_beta: 10.0
+    use_smoothness_reg: False
+    smoothness_reg:
+      weight: 0.1
+      k: 3
+    use_eikonal_reg: False
+    eikonal_reg:
+      weight: 0.01
+
+data:
+  datasets_train: ['/scans/scene0244_01/info.json'] # scene0244_01
+  datasets_val: ['/scans/scene0244_01/info.json']
+  datasets_test: ['/scans/scene0244_01/info.json']
+  
+  num_workers_train: 7
+  num_workers_val: 7
+  num_workers_test: 7
+  batch_size_train: 1  # Needs to be divisible by the number of devices
+
+  sequence_amount_train: 1.0  # controls the number of sequences scene-denpendently
+  sequence_amount_val: 1.0    # num_sequences = sequence_amount * (num_scene_frames / sequence_length)
+  sequence_amount_test: 1.0
+  sequence_length: 710 # number of raw frames to be considered as one sequence
+  sequence_locations: 'free' # 'free' or 'fixed' or 'evenly_spaced'
+  sequence_order: 'random'  # 'random' or 'sorted'
+  num_frames_train: 8  # number of frames to select from a sequence
+  num_frames_val: 8
+  num_frames_test: 8
+  frame_locations: 'evenly_spaced'  # 'random' or 'evenly_spaced'
+  frame_order: 'random'  # 'random' or 'sorted'
+  voxel_size: .04
+  voxel_dim_train: [190, 180, 50] # [160, 160, 64]
+  voxel_dim_val: [190, 180, 50] # [256, 256, 96]
+  voxel_dim_test: [190, 180, 50] # [416, 416, 128
+
+logger:
+  wandb_local:
+    #name: "train_tsdf_one_scene_seqsN_frames3"
+    job_type: "experimental" # train / eval / test / experimental / sweep
+    tags: ${tags}
+    entity: "generalizable-nerfs"
+    offline: False
+    mute_local: False
