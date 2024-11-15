@@ -34,7 +34,7 @@ def process(info_file, save_path):
         transforms.ResizeImage((width,height)),
         transforms.ToTensor(),
     ])
-    dataset = SceneDataset(info_file, transform, frame_types=['depth'])
+    dataset = SceneDataset(info_file, transform, frame_types=['depth'], from_archive=True)
     
     scene = dataset.info['scene']
 

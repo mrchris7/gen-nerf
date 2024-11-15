@@ -761,19 +761,6 @@ def add_dicts(dict1, dict2):
         result[key] = dict1.get(key, 0) + dict2.get(key, 0)
     return result
 
-
-def log_mesh_to_wandb(mesh, name):
-    with tempfile.NamedTemporaryFile(suffix=".obj") as tmpfile:
-        mesh.export(tmpfile.name, file_type='obj')
-        wandb.log({name: wandb.Object3D(tmpfile.name)})
-
-
-def log_image_to_wandb(image_tensor, name):
-    img = image_tensor.cpu().numpy()
-    img = np.transpose(img, (1, 2, 0))  # convert CHW to HWC
-    wandb.log({name: wandb.Image(img)})
-
-
 def get_grid_coordinates(nx, ny, nz, volume_size, origin, device):
     x = torch.linspace(0, volume_size[0], nx, device=device)
     y = torch.linspace(0, volume_size[1], ny, device=device)
@@ -1142,3 +1129,7 @@ def grid_sample_3d(image, optical):
                bse_val.view(N, C, D, H, W) * bse.view(N, 1, D, H, W))
 
     return out_val
+
+
+def merge_feature_planes(plane_1, plane_2):
+    return plane_1

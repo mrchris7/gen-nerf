@@ -88,7 +88,7 @@ def fuse_scene(path_meta, scene, voxel_size, trunc_ratio=3, max_depth=3,
                                     transforms.IntrinsicsPoseToProjection(),
                                   ])
     frame_types=['depth', 'semseg'] if fuse_semseg else ['depth']
-    dataset = SceneDataset(info_file, transform, frame_types, prepare=True)
+    dataset = SceneDataset(info_file, transform, frame_types, from_archive=False)
     dataloader = torch.utils.data.DataLoader(dataset, batch_size=None,
                                              batch_sampler=None, num_workers=4)
 

@@ -80,7 +80,7 @@ def process(info_file, save_path, total_scenes_index, total_scenes_count):
         transforms.ResizeImage((width,height)),
         transforms.ToTensor(),
     ])
-    dataset = SceneDataset(info_file, transform, frame_types=['depth'])
+    dataset = SceneDataset(info_file, transform, frame_types=['depth'], from_archive=True)
     dataloader = torch.utils.data.DataLoader(dataset, batch_size=None,
                                              batch_sampler=None, num_workers=2)
     scene = dataset.info['scene']

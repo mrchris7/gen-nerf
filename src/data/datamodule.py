@@ -16,12 +16,26 @@ class ScannetDataModule(LightningDataModule):
         datasets_train: list[str],
         datasets_val: list[str],
         datasets_test: list[str],
+        from_archive: bool,
         num_workers_train: int,
         num_workers_val: int,
         num_workers_test: int,
         pin_memory: bool,
         batch_size_train: int,
+        shuffle_train: bool,
+        shuffle_val: bool,
+        shuffle_test: bool,
+        random_rotation_3d: bool,
+        random_translation_3d: bool,
+        pad_xy_3d: float,
+        pad_z_3d: float,
+        voxel_size: float,
+        voxel_types: list[str],
+        voxel_dim_train: list[int],
+        voxel_dim_val: list[int],
+        voxel_dim_test: list[int],
         dataset_type: str,
+        # for ScenesSequencesDataset:
         sequence_amount_train: float,
         sequence_amount_val: float,
         sequence_amount_test: float,
@@ -33,22 +47,13 @@ class ScannetDataModule(LightningDataModule):
         num_frames_test: int,
         frame_locations: str,
         frame_order: str,
-        random_rotation_3d: bool,
-        random_translation_3d: bool,
-        pad_xy_3d: float,
-        pad_z_3d: float,
-        voxel_size: float,
-        voxel_types: list[str],
-        voxel_dim_train: list[int],
-        voxel_dim_val: list[int],
-        voxel_dim_test: list[int],
         # for FrameDataset:
         length_train: int = 0,
         length_val: int = 0,
         length_test: int = 0,
         frame_idx: int = 0,
         scene_idx: int = 0,
-        # for SceneSequenceDataset:
+        # for OneSceneDataset:
         frames_train: int = 0,
         frames_val: int = 0,
         frames_test: int = 0,
@@ -102,24 +107,27 @@ class ScannetDataModule(LightningDataModule):
         if self.hparams.dataset_type=='frame':
             dataset = FrameDataset(
                 info_files, self.hparams.frame_idx, self.hparams.length_train, self.hparams.scene_idx, 
-                transform, self.frame_types, self.voxel_types, self.voxel_sizes
+                transform, self.frame_types, self.voxel_types, self.voxel_sizes, self.hparams.from_archive
             )
         elif self.hparams.dataset_type=='scene':
             dataset = OneSceneDataset(
-                info_files[0], transform, self.frame_types, self.voxel_types, self.voxel_sizes, self.hparams.frames_train, False
+                info_files[0], transform, self.frame_types, self.voxel_types, self.voxel_sizes, 
+                self.hparams.frames_train, self.hparams.from_archive
             )
         elif self.hparams.dataset_type=='sequences':
             dataset = ScenesSequencesDataset(
-                info_files, self.hparams.sequence_amount_train, self.hparams.sequence_length, self.hparams.sequence_locations,
-                self.hparams.sequence_order, self.hparams.num_frames_train, self.hparams.frame_locations,
-                self.hparams.frame_order, transform, self.frame_types, self.voxel_types, self.voxel_sizes
+                info_files, self.hparams.sequence_amount_train, self.hparams.sequence_length, 
+                self.hparams.sequence_locations, self.hparams.sequence_order, self.hparams.num_frames_train,
+                self.hparams.frame_locations, self.hparams.frame_order, transform, self.frame_types,
+                self.voxel_types, self.voxel_sizes, self.hparams.from_archive
             )
         else:
             raise NotImplementedError(f"Usage of unknown mode: {self.hparams.dataset_type}")
-        
+        print(f"Train Dataset len: {len(dataset)} (scenes: {len(dataset.info_files)})")
+
         dataloader = torch.utils.data.DataLoader(
             dataset, batch_size=self.batch_size_per_device, num_workers=self.hparams.num_workers_train,
-            collate_fn=collate_fn, shuffle=True, drop_last=True, pin_memory=self.hparams.pin_memory
+            collate_fn=collate_fn, shuffle=self.hparams.shuffle_train, drop_last=True, pin_memory=self.hparams.pin_memory
         )
         return dataloader
 
@@ -133,24 +141,27 @@ class ScannetDataModule(LightningDataModule):
         if self.hparams.dataset_type=='frame':
             dataset = FrameDataset(
                 info_files, self.hparams.frame_idx, self.hparams.length_val, self.hparams.scene_idx, 
-                transform, self.frame_types, self.voxel_types, self.voxel_sizes
+                transform, self.frame_types, self.voxel_types, self.voxel_sizes, self.hparams.from_archive
             )
         elif self.hparams.dataset_type=='scene':
             dataset = OneSceneDataset(
-                info_files[0], transform, self.frame_types, self.voxel_types, self.voxel_sizes, self.hparams.frames_val, False
+                info_files[0], transform, self.frame_types, self.voxel_types, self.voxel_sizes,
+                self.hparams.frames_val, self.hparams.from_archive
             )
         elif self.hparams.dataset_type=='sequences':
             dataset = ScenesSequencesDataset(
-                info_files, self.hparams.sequence_amount_val, self.hparams.sequence_length, self.hparams.sequence_locations,
-                self.hparams.sequence_order, self.hparams.num_frames_val, self.hparams.frame_locations,
-                self.hparams.frame_order, transform, self.frame_types, self.voxel_types, self.voxel_sizes
+                info_files, self.hparams.sequence_amount_val, self.hparams.sequence_length,
+                self.hparams.sequence_locations, self.hparams.sequence_order, self.hparams.num_frames_val,
+                self.hparams.frame_locations, self.hparams.frame_order, transform, self.frame_types,
+                self.voxel_types, self.voxel_sizes, self.hparams.from_archive
             )
         else:
             raise NotImplementedError(f"Usage of unknown mode: {self.hparams.dataset_type}")
-        
+        print(f"Validation Dataset len: {len(dataset)} (scenes: {len(dataset.info_files)})")
+
         dataloader = torch.utils.data.DataLoader(
             dataset, batch_size=1, num_workers=self.hparams.num_workers_val, collate_fn=collate_fn,
-            shuffle=False, drop_last=False, pin_memory=self.hparams.pin_memory
+            shuffle=self.hparams.shuffle_val, drop_last=False, pin_memory=self.hparams.pin_memory
         )
         return dataloader
 
@@ -164,24 +175,27 @@ class ScannetDataModule(LightningDataModule):
         if self.hparams.dataset_type=='frame':
             dataset = FrameDataset(
                 info_files, self.hparams.frame_idx, self.hparams.length_test, self.hparams.scene_idx, 
-                transform, self.frame_types, self.voxel_types, self.voxel_sizes
+                transform, self.frame_types, self.voxel_types, self.voxel_sizes, self.hparams.from_archive
             )
         elif self.hparams.dataset_type=='scene':
             dataset = OneSceneDataset(
-                info_files[0], transform, self.frame_types, self.voxel_types, self.voxel_sizes, self.hparams.frames_test, False
+                info_files[0], transform, self.frame_types, self.voxel_types, self.voxel_sizes,
+                self.hparams.frames_test, self.hparams.from_archive
             )
         elif self.hparams.dataset_type=='sequences':
             dataset = ScenesSequencesDataset(
-                info_files, self.hparams.sequence_amount_test, self.hparams.sequence_length, self.hparams.sequence_locations,
-                self.hparams.sequence_order, self.hparams.num_frames_test, self.hparams.frame_locations,
-                self.hparams.frame_order, transform, self.frame_types, self.voxel_types, self.voxel_sizes
+                info_files, self.hparams.sequence_amount_test, self.hparams.sequence_length,
+                self.hparams.sequence_locations, self.hparams.sequence_order, self.hparams.num_frames_test,
+                self.hparams.frame_locations, self.hparams.frame_order, transform, self.frame_types,
+                self.voxel_types, self.voxel_sizes, self.hparams.from_archive
             )
         else:
             raise NotImplementedError(f"Usage of unknown mode: {self.hparams.dataset_type}")
-        
+        print(f"Test dataset len: {len(dataset)} (scenes: {len(dataset.info_files)})")
+
         dataloader = torch.utils.data.DataLoader(
             dataset, batch_size=1, num_workers=self.hparams.num_workers_test, collate_fn=collate_fn,
-            shuffle=False, drop_last=False, pin_memory=self.hparams.pin_memory
+            shuffle=self.hparams.shuffle_test, drop_last=False, pin_memory=self.hparams.pin_memory
         )
         return dataloader
 

@@ -34,14 +34,14 @@ class LocalWriter:
         os.makedirs(os.path.dirname(file), exist_ok=True)
         tsdf.save(file)   
     
-    '''
-    def log_image(self, path, image):
+    def log_image(self, image, path):
+        # tries to auto convert image into a PIL image
         if self._mute:
-                return
+            return
         file = os.path.join(self._save_path, f'{path}.png')
+        pil_image = wandb.Image(image).image
         os.makedirs(os.path.dirname(file), exist_ok=True)
-        tsdf.save(file)
-    '''
+        pil_image.save(file)
     
 class WandbLocalLogger(WandbLogger):
 
@@ -62,3 +62,17 @@ class WandbLocalLogger(WandbLogger):
         pc (x, y, z, color): pointcloud 
         """
         wandb.log({name: wandb.Object3D(pc)})
+
+    '''
+    def log_mesh_custom(self, mesh, name):
+        with tempfile.NamedTemporaryFile(suffix=".obj") as tmpfile:
+            mesh.export(tmpfile.name, file_type='obj')
+            wandb.log({name: wandb.Object3D(tmpfile.name)})
+    '''
+
+    '''
+    def log_image_custom(self, image_tensor, name):
+        img = image_tensor.cpu().numpy()
+        img = np.transpose(img, (1, 2, 0))  # convert CHW to HWC
+        wandb.log({name: wandb.Image(img)})
+    '''

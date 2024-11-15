@@ -140,8 +140,12 @@ class GenNerf(L.LightningModule):
 
         # build volume using PointNet (currently it does not support dynamic accumulation)
         if self.cfg.encoder.use_pointnet:
-            self.c_plane = self.pointnet(accum_sparse_xyz)  # dict with keys 'xy', 'yz', 'xz' 
-                                                            # each (B, c_dim=512?, plane_reso=128, plane_reso=128)
+            c_plane_new = self.pointnet(accum_sparse_xyz) # dict with keys 'xy', 'yz', 'xz' 
+                                                          # each (B, c_dim=512?, plane_reso=128, plane_reso=128)
+            if not self.c_plane == 0:
+                self.c_plane = merge_feature_planes(c_plane_new, self.c_plane)
+            else:
+                self.c_plane = c_plane_new
 
 
     def sample_plane_feature(self, p, c, plane='xz'):
@@ -583,9 +587,8 @@ class GenNerf(L.LightningModule):
                 self.logger.local.log_tensor(sampled_xyz, f'frustum_sampling/sampled_points_{i}')
                 self.logger.local.log_tensor(pose, f'frustum_sampling/pose_{i}')
                 self.logger.local.log_tensor(intrinsics, f'frustum_sampling/intrinsics_{i}')
-                self.logger.local.log_tensor(image, f'frustum_sampling/image_{i}')
-                self.logger.local.log_tensor(depth, f'frustum_sampling/depth_{i}')
-            
+                self.logger.local.log_image(image[0], f'frustum_sampling/image_{i}')
+                self.logger.local.log_image(depth[0], f'frustum_sampling/depth_{i}')
             #self.logger.local.log_tensor(batch['image'][0, i, :, :, :], f'{mode}_image_{i}')
 
             outputs = self.forward(sampled_xyz)

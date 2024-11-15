@@ -43,7 +43,7 @@ def load_info_json(json_file):
     return info
     
 
-def map_frame(frame, frame_types=[], prepare=False):
+def map_frame(frame, frame_types=[], from_archive=True):
     """ Load images and metadata for a single frame.
 
     Given an info json we use this to load the images, etc for a single frame
@@ -59,14 +59,14 @@ def map_frame(frame, frame_types=[], prepare=False):
 
     data = {key:value for key, value in frame.items()}
     
-    if prepare:
-        data['image'] = Image.open(frame['file_name_image_prep'])
-        if 'depth' in frame_types:
-            depth = Image.open(frame['file_name_depth_prep'])
-    else:
+    if from_archive:
         data['image'] = open_from_archive(frame['file_name_image'])
         if 'depth' in frame_types:
             depth = open_from_archive(frame['file_name_depth'])
+    else:
+        data['image'] = Image.open(frame['file_name_image_prep'])
+        if 'depth' in frame_types:
+            depth = Image.open(frame['file_name_depth_prep'])
             
     depth = np.array(depth, dtype=np.float32) / DEPTH_SHIFT
     data['depth'] = Image.fromarray(depth)
@@ -76,7 +76,7 @@ def map_frame(frame, frame_types=[], prepare=False):
     return data
 
 
-def map_frames(frames, frame_ids, frame_types=[], prepare=False):
+def map_frames(frames, frame_ids, frame_types=[], from_archive=True):
     """ Load images and metadata for frame_ids of frames.
 
     Given an info json we use this to load the images, etc for a all frames
@@ -86,6 +86,7 @@ def map_frames(frames, frame_ids, frame_types=[], prepare=False):
             (see datasets/README)
         frame_ids: frame ids to load
         frame_types: which images to load (ex: depth, semseg, etc)
+        from_archive: whether data is stored in an archive
 
     Returns:
         dict containg metadata plus the loaded images
@@ -96,7 +97,12 @@ def map_frames(frames, frame_ids, frame_types=[], prepare=False):
     for i in frame_ids:
         frames_data.append(frames[i].copy())
 
-    if prepare:
+    if from_archive:
+        # images are stored in an archive
+        add_images(frames_data, is_depth=False)
+        if 'depth' in frame_types:
+            add_images(frames_data, is_depth=True)
+    else:
         # images are stored unpacked (not used here)
         for data in frames_data:
             data['image'] = Image.open(data['file_name_image_prep'])
@@ -104,11 +110,6 @@ def map_frames(frames, frame_ids, frame_types=[], prepare=False):
                 depth = Image.open(data['file_name_depth_prep'])
                 depth = np.array(depth, dtype=np.float32) / DEPTH_SHIFT
                 data['depth'] = Image.fromarray(depth)
-    else:
-        # images are stored in an archive
-        add_images(frames_data, is_depth=False)
-        if 'depth' in frame_types:
-            add_images(frames_data, is_depth=True)
     
     for data in frames_data:
         data['intrinsics'] = np.array(data['intrinsics'], dtype=np.float32)
@@ -198,7 +199,7 @@ class SceneDataset(torch.utils.data.Dataset):
     """Pytorch Dataset for a single scene. getitem loads individual frames"""
 
     def __init__(self, info_file, transform=None, frame_types=[],
-                 voxel_types=[], voxel_sizes=[], num_frames=-1, prepare=False):
+                 voxel_types=[], voxel_sizes=[], num_frames=-1, from_archive=True):
         """
         Args:
             info_file: path to json file (format described in datasets/README)
@@ -207,6 +208,7 @@ class SceneDataset(torch.utils.data.Dataset):
             voxel_types: list of voxel attributes to load with the TSDF
             voxel_sizes: list of voxel sizes to load
             num_frames: number of evenly spaced frames to use (-1 for all)
+            from_archive: whether data is stored in an archive
         """
 
         self.info = load_info_json(info_file)
@@ -214,7 +216,7 @@ class SceneDataset(torch.utils.data.Dataset):
         self.frame_types = frame_types
         self.voxel_types = voxel_types
         self.voxel_sizes = voxel_sizes
-        self.prepare = prepare
+        self.from_archive = from_archive
 
         # select evenly spaced subset of frames
         if num_frames>-1:
@@ -232,7 +234,7 @@ class SceneDataset(torch.utils.data.Dataset):
             dict of meta data and images for a single frame
         """
 
-        frame = map_frame(self.info['frames'][i], self.frame_types, self.prepare)
+        frame = map_frame(self.info['frames'][i], self.frame_types, self.from_archive)
 
         # put data in common format so we can apply transforms
         data = {'dataset': self.info['dataset'],
@@ -270,7 +272,7 @@ class SceneDataset(torch.utils.data.Dataset):
         # TODO: also get vertex instances/semantics
         return trimesh.load(self.info['file_name_mesh_gt'], process=False)
 
-
+# not used
 class ScenesDataset(torch.utils.data.Dataset):
     """ Pytorch Dataset for a multiple scenes
     
@@ -344,9 +346,8 @@ class ScenesSequencesDataset(torch.utils.data.Dataset):
     """
 
     def __init__(self, info_files, sequence_amount, sequence_length, sequence_locations,
-                 sequence_order, num_frames, frame_locations, frame_order,
-                 #num_keyframes, keyframes, num_keyframes_select,
-                 transform=None, frame_types=[], voxel_types=[], voxel_sizes=[]):
+                 sequence_order, num_frames, frame_locations, frame_order, transform=None,
+                 frame_types=[], voxel_types=[], voxel_sizes=[], from_archive=True):
         """
         Args:
             info_files: list of info_json files
@@ -361,6 +362,7 @@ class ScenesSequencesDataset(torch.utils.data.Dataset):
             frame_types: which images to load (ex: depth, semseg, etc)
             voxel_types: list of voxel attributes to load with the TSDF
             voxel_sizes: list of voxel sizes to load
+            from_archive: whether data is stored in an archive
         """
 
         self.info_files = info_files
@@ -375,22 +377,16 @@ class ScenesSequencesDataset(torch.utils.data.Dataset):
         self.frame_types = frame_types
         self.voxel_types = voxel_types
         self.voxel_sizes = voxel_sizes
+        self.from_archive = from_archive
 
-        #self.num_keyframes = num_keyframes
-        #self.keyframes = keyframes
-        #self.num_keyframe_select = num_keyframes_select
-        
         start_idxs_list = []
         num_sequences_list = []
-        keyframes_list = []
         delete_scenes_idxs = []
         for i, info_file in enumerate(self.info_files):
             # calculate num sequences for each scene
             info = load_info_json(info_file)
             num_scene_frames = len(info['frames'])
             num_sequences = int(self.sequence_amount * (num_scene_frames / self.sequence_length))
-            print("num_scene_frames", num_scene_frames)
-            print("num_sequences", num_sequences)
 
             if num_scene_frames < self.sequence_length:
                 # exclude scenes that have not enough frames
@@ -401,8 +397,6 @@ class ScenesSequencesDataset(torch.utils.data.Dataset):
 
             # calculate start indices for each sequence of each scene
             start_idxs = self.calculate_start_idxs(num_scene_frames, num_sequences)
-            #print("start_idxs", start_idxs)
-            #start_idxs = [5466]
 
             if self.sequence_order=='random':
                 pass  # already random
@@ -413,16 +407,6 @@ class ScenesSequencesDataset(torch.utils.data.Dataset):
 
             start_idxs_list.append(start_idxs)
 
-            '''
-            # create keyframe set:
-            if self.num_keyframes == 1:
-                evenly_spaced_keyframes = np.array([num_scene_frames//2])  # select middle frame
-            else:
-                evenly_spaced_keyframes = np.linspace(0, num_scene_frames, num=self.num_keyframes).astype(int)
-            np.random.shuffle(evenly_spaced_keyframes)
-            keyframes_list.append(evenly_spaced_keyframes)
-            '''
-
         # exclude scenes that have not enough frames
         for i in sorted(delete_scenes_idxs, reverse=True):
             info = load_info_json(self.info_files[i])
@@ -430,8 +414,9 @@ class ScenesSequencesDataset(torch.utils.data.Dataset):
             del self.info_files[i]
 
         self.num_sequences_list = num_sequences_list
+        #print("num_sequences_list", num_sequences_list)
         self.start_idxs_list = start_idxs_list
-        self.keyframes_list = keyframes_list
+        #print("start_idxs_list", start_idxs_list)
 
     def __len__(self):
         return sum(self.num_sequences_list)
@@ -446,13 +431,14 @@ class ScenesSequencesDataset(torch.utils.data.Dataset):
 
         if self.frame_order=='random':
             pass  # already random
-        elif self.sequence_order=='sorted':
+        elif self.frame_order=='sorted':
             frame_ids.sort()
         else:
-            raise NotImplementedError(f"sequence_order: {self.sequence_order}")
+            raise NotImplementedError(f"frame_order: {self.frame_order}")
 
         #print("frame_ids", frame_ids)
-        frames = map_frames(info['frames'], frame_ids, self.frame_types)
+        #print("i:", i, " scene_file:", info['scene'], " frames:", frame_ids)
+        frames = map_frames(info['frames'], frame_ids, self.frame_types, self.from_archive)
 
         data = {'dataset': info['dataset'],
                 'scene': info['scene'],
@@ -596,7 +582,7 @@ class FrameDataset(torch.utils.data.Dataset):
     """
 
     def __init__(self, info_files, frame_idx, length, scene_idx=0, transform=None,
-                 frame_types=[], voxel_types=[], voxel_sizes=[]):
+                 frame_types=[], voxel_types=[], voxel_sizes=[], from_archive=True):
         """
         Args:
             info_files: list of info_json files
@@ -608,6 +594,7 @@ class FrameDataset(torch.utils.data.Dataset):
             frame_selection: how to choose the frames in the sequence
             voxel_types: list of voxel attributes to load with the TSDF
             voxel_sizes: list of voxel sizes to load
+            from_archive: whether data is stored in an archive
         """
 
         self.info_files = info_files
@@ -618,6 +605,7 @@ class FrameDataset(torch.utils.data.Dataset):
         self.frame_types = frame_types
         self.voxel_types = voxel_types
         self.voxel_sizes = voxel_sizes
+        self.from_archive = from_archive
         self.info = load_info_json(self.info_files[scene_idx])
 
     def __len__(self):
@@ -625,7 +613,7 @@ class FrameDataset(torch.utils.data.Dataset):
 
     def __getitem__(self, i):
         """ Load the same frame (image and TSDF) the i-th time"""
-        frames = [map_frame(self.info['frames'][self.frame_idx], self.frame_types)]
+        frames = [map_frame(self.info['frames'][self.frame_idx], self.frame_types, from_archive=self.from_archive)]
 
         data = {'dataset': self.info['dataset'],
                 'scene': self.info['scene'],
@@ -636,10 +624,8 @@ class FrameDataset(torch.utils.data.Dataset):
         data = map_tsdf(self.info, data, self.voxel_types, self.voxel_sizes)
 
         # apply transforms
-        #print("XXXXXXXXXX before tsdf_vol", data['vol_04'].tsdf_vol.shape) # [265, 280, 132] (when created) -> min:-1, max:1, mean:0.77
         if self.transform is not None:
             data = self.transform(data)
-        #print("XXXXXXXXXX after tsdf_vol", data['vol_04_tsdf'].shape) # [1, 200, 2510 64] = voxel_dim_val
 
         return data
 
@@ -648,7 +634,7 @@ class OneSceneDataset(torch.utils.data.Dataset):
     """Pytorch Dataset for multiple frames in a single scene. getitem loads individual frames"""
 
     def __init__(self, info_file, transform=None, frame_types=[],
-                 voxel_types=[], voxel_sizes=[], frames=[], prepare=False):
+                 voxel_types=[], voxel_sizes=[], frames=[], from_archive=True):
         """
         Args:
             info_file: path to json file (format described in datasets/README)
@@ -656,7 +642,8 @@ class OneSceneDataset(torch.utils.data.Dataset):
             frame_types: which images to load (ex: depth, semseg, etc)
             voxel_types: list of voxel attributes to load with the TSDF
             voxel_sizes: list of voxel sizes to load
-            num_frames: number of evenly spaced frames to use (-1 for all)
+            frames: list of frame ids to use
+            from_archive: whether data is stored in an archive
         """
 
         self.info = load_info_json(info_file)
@@ -664,7 +651,7 @@ class OneSceneDataset(torch.utils.data.Dataset):
         self.frame_types = frame_types
         self.voxel_types = voxel_types
         self.voxel_sizes = voxel_sizes
-        self.prepare = prepare
+        self.from_archive = from_archive
 
         self.info['frames'] = [self.info['frames'][i] for i in frames]
 
@@ -678,7 +665,7 @@ class OneSceneDataset(torch.utils.data.Dataset):
             dict of meta data and images for a single frame
         """
 
-        frame = map_frame(self.info['frames'][i], self.frame_types, self.prepare)
+        frame = map_frame(self.info['frames'][i], self.frame_types, self.from_archive)
 
         # put data in common format so we can apply transforms
         data = {'dataset': self.info['dataset'],
@@ -717,80 +704,3 @@ class OneSceneDataset(torch.utils.data.Dataset):
     def get_mesh(self):
         # TODO: also get vertex instances/semantics
         return trimesh.load(self.info['file_name_mesh_gt'], process=False)
-
-'''
-# not finished yet
-class SceneSequenceDataset(torch.utils.data.Dataset):
-    """Pytorch Dataset for multiple frames in a single scene. getitem loads individual frames"""
-
-    def __init__(self, info_file, transform=None, frame_types=[],
-                 voxel_types=[], voxel_sizes=[], frames=[], prepare=False):
-        """
-        Args:
-            info_file: path to json file (format described in datasets/README)
-            transform: transform object to preprocess data
-            frame_types: which images to load (ex: depth, semseg, etc)
-            voxel_types: list of voxel attributes to load with the TSDF
-            voxel_sizes: list of voxel sizes to load
-            num_frames: number of evenly spaced frames to use (-1 for all)
-        """
-
-        self.info = load_info_json(info_file)
-        self.transform = transform
-        self.frame_types = frame_types
-        self.voxel_types = voxel_types
-        self.voxel_sizes = voxel_sizes
-        self.prepare = prepare
-
-        self.info['frames'] = [self.info['frames'][i] for i in frames]
-
-
-    def __len__(self):
-        return len(self.info['frames'])
-
-    def __getitem__(self, i):
-        """
-        Returns:
-            dict of meta data and images for a single frame
-        """
-
-        frame = map_frame(self.info['frames'][i], self.frame_types, self.prepare)
-
-        # put data in common format so we can apply transforms
-        data = {'dataset': self.info['dataset'],
-                #'instances': self.info['instances'],
-                'frames': [frame]}
-        data = map_tsdf(self.info, data, self.voxel_types, self.voxel_sizes)
-
-        if self.transform is not None:
-            data = self.transform(data)
-        # remove data from common format and return the single frame
-        #data = data['frames'][0]
-
-        return data
-
-    def get_tsdf(self):
-        """
-        Returns:
-            dict with TSDFs
-        """
-
-        # put data in common format so we can apply transforms
-        data = {'dataset': self.info['dataset'],
-                #'instances': self.info['instances'],
-                'frames': [],
-               }
-
-        # load tsdf volumes
-        data = map_tsdf(self.info, data, self.voxel_types, self.voxel_sizes)
-
-        # apply transforms
-        if self.transform is not None:
-            data = self.transform(data)
-
-        return data
-
-    def get_mesh(self):
-        # TODO: also get vertex instances/semantics
-        return trimesh.load(self.info['file_name_mesh_gt'], process=False)
-'''
