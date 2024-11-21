@@ -15,6 +15,44 @@ conda config --add envs_dirs $WORK/software/private/conda/envs
 
 More information: https://doc.nhr.fau.de/environment/python-env/#first-time-only-initialization
 
+## Installation
+Load modules:
+```
+module load python
+module load gcc
+```
+
+Create a conda environment:
+
+```
+conda create -n gen-nerf-cuda118 python=3.9
+conda activate gen-nerf-cuda118
+```
+Install necessary packages in the following order:
+
+```
+conda install pytorch==2.3.0 torchvision==0.18.0 torchaudio pytorch-cuda=11.8 -c pytorch -c nvidia
+pip install torch-scatter -f https://data.pyg.org/whl/torch-2.3.0+cu118.html
+pip install lightning
+pip install hydra-core --upgrade
+pip install rootutils
+pip install matplotlib==3.8
+pip install scikit-image
+pip install trimesh>=3.7.6
+pip install opencv-python
+pip install open3d>=0.10.0.0
+pip install wandb tensorboard
+pip install rich pypng pyrender
+pip install torch-cluster  # before: module load gcc
+```
+
+Clone this repository to the ```$HOME``` filesystem and install it as a package:
+```
+git clone https://github.com/mrchris7/gen-nerf.git
+cd gen-nerf
+pip install -e .
+```
+
 
 ## Data Preparation
 
