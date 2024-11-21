@@ -1,7 +1,7 @@
 #!/bin/bash -l
 
 # Name
-#SBATCH --job-name=generate_tsdf
+#SBATCH --job-name=read_scannet
 
 # Settings
 #SBATCH --mail-type=NONE
@@ -22,7 +22,7 @@
 # SBATCH --mem-per-cpu=3250M  # outdated
 
 # Max time (hh:mm:ss)
-#SBATCH --time=08:00:00
+#SBATCH --time=06:00:00
 
 # load modules
 unset SLURM_EXPORT_ENV
@@ -43,26 +43,19 @@ echo CUDA_VISIBLE_DEVICES="$CUDA_VISIBLE_DEVICES"
 echo slurm_gpus_on_node="$SLURM_GPUS_ON_NODE"
 echo ------------------------------------------
 
-PROJECT=. # i.e. $HOME/workspace/gennerf/gen-nerf
+PROJECT=.  # i.e. $HOME/workspace/gennerf/gen-nerf
 
 PATH_RAW=$1  # i.e. $WORK/data/scannet_raw
 PATH_DATA=$2  # i.e. $WORK/data/scannet
 
 # execute
-CMD="python $PROJECT/scripts/build_scannet.py\
- --path_target $TMPDIR/data/scannet\
- --path_raw $PATH_RAW\
- --path_archive $PATH_DATA\
- --extract_archives"
- 
-echo ${CMD}
-${CMD}
+CMD="python $PROJECT/scripts/read_scannet.py\
+ --path_in $PATH_RAW\
+ --path_out $PATH_DATA\
+ --export_all\
+ --archive_result\
+ --scenes_file $PROJECT/splits/scenes_file_living.txt"
 
-echo "Dataset built!"
-
-CMD="python $PROJECT/src/data/prepare/prepare_data.py\
- --path $TMPDIR/data/scannet\
- --path_meta $WORK/data/scannet --skip_existing"
 echo ${CMD}
 ${CMD}
 EXITCODE=$?

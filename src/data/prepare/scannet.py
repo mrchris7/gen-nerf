@@ -179,7 +179,7 @@ def prepare_scannet_splits(path, path_meta):
                 print(json_file)
 
     # copy mapping file into dataset splits for easy access
-    os.system('cp %s/scannetv2-labels.combined.tsv data/.'%path)
+    #os.system('cp %s/scannetv2-labels.combined.tsv data/.'%path)
 
 
 

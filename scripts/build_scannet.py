@@ -22,6 +22,9 @@ PATH_TARGET
 └───scannetv2_test.txt
 └───scannetv2_train.txt
 └───scannetv2_val.txt
+└───scannetv2_living_train.txt
+└───scannetv2_living_test.txt
+└───scannetv2_living_val.txt
 └───scans
 |   └───scene0000_00
 |   |   └───scene0000_00.aggregation.json

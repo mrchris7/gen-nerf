@@ -16,14 +16,14 @@ We encode observations $D$, in the form of posed RGB-D frames, using an encoding
 
 
 <p align="center">
- <img src="imgs/method.png" width=600>
+ <img src="doc/imgs/method.png" width=600>
     <br> 
     <em>Overview of our method. The area highlighted in green shows what is currently implemented.</em>
 </p>
 
 
 <p align="center">
- <img src="imgs/reconstruction.png" width=600>
+ <img src="doc/imgs/reconstruction.png" width=600>
     <br> 
     <em>Scene reconstruction from N=8 depth frames.</em>
 </p>
@@ -50,7 +50,7 @@ pip install opencv-python
 pip install open3d>=0.10.0.0
 pip install wandb tensorboard
 pip install rich pypng pyrender
-pip install torch-cluster  # load gcc!
+pip install torch-cluster  # before: module load gcc
 ```
 
 Clone this repository and install it as a package:
@@ -61,10 +61,19 @@ pip install -e .
 ```
 
 ## Data Preparation
+We provide instructions [nhrfau_setup.md](doc/nhrfau_setup.md) for data preparation specifically for the [Erlangen National High Performance Computing Center (NHR@FAU)](https://hpc.fau.de/).
+
 We use the [ScanNet](http://www.scan-net.org/) dataset for this work.
 The following steps describe how to prepare the data when working on a computational cluster that provides a limit on the number of files on the persistent space however it allows for an unlimited number of files on a temporary node-local space.
 
-First, you need to download the dataset to a directory ```PATH_RAW```, following the instructions from http://www.scan-net.org/. You also need to download the data splits and from https://github.com/ScanNet/ScanNet/tree/master/BenchmarkScripts (Benchmark Scripts).
+First, you need to download the dataset to a directory ```PATH_RAW```, following the instructions from http://www.scan-net.org/. 
+
+Then you need to add the data splits to ```PATH_RAW```. We provide the official splits for all scenes and custom splits for only the living room scenes that can be copied with:
+```
+scp -r splits/ PATH_RAW
+```
+
+The official splits can also be found at https://github.com/ScanNet/ScanNet/tree/master/BenchmarkScripts (Benchmark Scripts).
 
 
 We extract the data from the ```.sens``` format to a directory ```PATH_DATA```. Note that we archive all frames of a sequence to reduce the number of files:
@@ -99,6 +108,12 @@ After the ground-truth TSDF values are generated, the node-local directory `PATH
 The final directory structure should look as follows:
 ```
 PATH_DATA
+└───scannet_test.txt
+└───scannet_train.txt
+└───scannet_val.txt
+└───scannet_living_test.txt
+└───scannet_living_train.txt
+└───scannet_living_val.txt
 └───scans
 |   └───scene0000_00
 |   |   └───info.json
@@ -125,14 +140,18 @@ PATH_DATA
 
 To setup this structure you can modify and run these two job scripts when working on a computing cluster:
 ```
-sbatch job_scripts/read_scannet.sh
-sbatch job_scripts/generate_tsdf.sh
+sbatch job_scripts/read_scannet.sh PATH_RAW PATH_DATA
+sbatch job_scripts/generate_tsdf.sh PATH_RAW PATH_DATA
 ```
 
 
 ## Configuration
 
-We use the configuration framework Hydra that allows for structured and hierarchical organization of configuration files (see `configs`). To define a new experiment, create a new file i.e. `new_exp.yaml` inside `configs/experiment` and set the desired parameters.
+We use the configuration framework Hydra that allows for structured and hierarchical organization of configuration files (see `configs`). 
+
+Check the paths in the config ```configs/paths/cluster.yaml``` and update them if necessary.
+
+To define a new experiment, create a new file i.e. `new_exp.yaml` inside `configs/experiment` and set the desired parameters.
 
 ## Training
 

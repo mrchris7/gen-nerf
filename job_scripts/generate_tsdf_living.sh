@@ -53,8 +53,9 @@ CMD="python $PROJECT/scripts/build_scannet.py\
  --path_target $TMPDIR/data/scannet\
  --path_raw $PATH_RAW\
  --path_archive $PATH_DATA\
- --extract_archives"
- 
+ --extract_archives\
+ --scenes_file $PROJECT/splits/scenes_file_living.txt"
+ #--num_scenes 10
 echo ${CMD}
 ${CMD}
 
