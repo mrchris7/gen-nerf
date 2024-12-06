@@ -2,19 +2,24 @@
 
 import itertools
 import numpy as np
-from sklearn.neighbors import NearestNeighbors
-from src.models.components.positional_encoding import PositionalEncoding
 import torch
 import torch.nn.functional as F
 import lightning as L
+from sklearn.neighbors import NearestNeighbors
+from src.models.components.positional_encoding import PositionalEncoding
+from torch_cluster import knn
 from src.models.components.pointnet import LocalPoolPointnet
 from src.models.components.spatial_encoder import SpatialEncoder
 from src.models.components.resnetfc import ResnetFC
 from src.models.components.heads3d import TSDFHeadSimple
 from src.models.utils import *
 from src.data.tsdf import TSDF
-from src.utils.debug_logger import DebugLogger
-from torch_cluster import knn
+from src.utils.visuals import *
+
+#o3d.visualization.rendering.OffscreenRenderer.enable_headless_mode(True)
+os.environ['PYOPENGL_PLATFORM'] = 'egl'  # use EGL for rendering
+os.environ['LIBGL_ALWAYS_SOFTWARE'] = '1'  # force software rendering
+
 
 
 class GenNerf(L.LightningModule):
@@ -287,23 +292,42 @@ class GenNerf(L.LightningModule):
         return optimizers, schedulers
     
     
-    def postprocess(self, tsdf_vol, origin):
-        """ Wraps the network output into a TSDF data structure
+    def extract_mesh(self, tsdf_list):
+        """ Extract a mesh from the TSDF volume.
+        
+        Args:
+            tsdf_list: tsdf volume (B, nx, ny, nz)
+
+        Returns:
+            list of trimesh.Trimesh (one mesh per scene in the batch)
+        """
+        meshes = []
+
+        for tsdf in tsdf_list:
+            mesh = tsdf.get_mesh()
+            meshes.append(mesh)
+
+        return meshes
+    
+    def postprocess_tsdf(self, tsdf_vol, origin):
+        """ Apply postprocessing to the TSDF volume and wrap it into a TSDF object.
         
         Args:
             tsdf_vol: tsdf volume (B, nx, ny, nz)
 
         Returns:
-            list of TSDFs (one TSDF per scene in the batch) (length == batchsize)
+            list of TSDF objects (one object per scene in the batch)
         """
-        tsdf_data = []
+        tsdf_objs = []
         batch_size = len(tsdf_vol)
 
         for i in range(batch_size):
+            # optionally apply post processing here...
             tsdf = TSDF(self.cfg.voxel_size, origin, tsdf_vol[i].squeeze(0))
-            tsdf_data.append(tsdf)
+            tsdf_objs.append(tsdf)
 
-        return tsdf_data
+        return tsdf_objs
+
 
     def loss_tsdf(self, outputs, targets):
         pred = outputs['tsdf']  # [B, N, 1]
@@ -444,12 +468,6 @@ class GenNerf(L.LightningModule):
     # used when testing only GenNerf model
 
     def training_step(self, batch, batch_idx):
-        '''
-        # required if "FrameDataset" is used!
-        if batch_idx == 0:
-            L.seed_everything(0, workers=True)
-            #print("train rand:", np.random.random(1))
-        '''
 
         #self.origin = batch['origin']
         total_loss = self.process_step(batch, 'train')
@@ -460,78 +478,37 @@ class GenNerf(L.LightningModule):
     
 
     def validation_step(self, batch, batch_idx):
-        '''
-        # required if "FrameDataset" is used!
-        if batch_idx == 0:
-            L.seed_everything(1, workers=True)
-            #print("val rand:", np.random.random(1))
-        '''
+
         #self.origin = batch['origin']
         total_loss = self.process_step(batch, 'val')
 
         B = batch['image'].shape[0]
         self.log_loss(total_loss, B, 'val')
 
-        # TODO: better printing -> use configs i.e. use_pointnet
-        #grad_mlp = self.print_average_gradients(self.mlp)
-        #self.log(f'avg_grad_mlp', grad_mlp, batch_size=B, sync_dist=True)
-        #grad_pointnet = self.print_average_gradients(self.pointnet)
-        #self.log(f'avg_grad_pointnet', grad_pointnet, batch_size=B, sync_dist=True)
+        # visualize the prediction of the final batch and log it
+        #is_last_batch = (batch_idx == len(self.trainer.val_dataloaders) - 1)
+        #if is_last_batch:      
+        #    self.geometric_reconstruction(batch, b_idx=0)  # assumes batch_size=1
 
         return total_loss['combined']
 
     def test_step(self, batch, batch_idx):
-        #self.origin = batch['origin']
-        B = batch['image'].shape[0]
-        device = batch['image'].device
-
-        total_loss = self.process_step(batch, 'test')
-        self.log_loss(total_loss, B, 'test')
-
-        # get target tsdf
-        tsdf_trgt = batch['vol_%02d_tsdf'%self.voxel_sizes[0]]  # (B, 1, nx, ny, nz)
-        tsdf_trgt = tsdf_trgt.squeeze(1)  # (B, nx, ny, nz)
-
-        # get predicted tsdf
-        _, nx, ny, nz = tsdf_trgt.shape
-        volume_size = self.cfg.voxel_size * np.array(self.cfg.voxel_dim_test)
-        print("vol-dims:", nx, ny, nz)
-        print("vol-size:", volume_size)
-        print("self.origin:", self.origin)
-        corner_xyz = get_corner_coordinates(volume_size, self.origin, device=device)
-        grid_xyz = get_grid_coordinates(nx, ny, nz, volume_size, self.origin, device=device)  # (nx, ny, nz, 3)
-        grid_xyz = grid_xyz.reshape(-1, 3)  # (N, 3)
-        grid_xyz = grid_xyz.unsqueeze(0)  # (B=1, N, 3)
-        #grid_points = grid_points.repeat(B, 1, 1)  # (B, N, 3)  # opt. repeat B times
-        grid_xyz.requires_grad_(True)
-
-        outputs = self.forward(grid_xyz)
-        tsdf_pred = outputs['tsdf']  # (B, N, 1)
-        tsdf_pred = tsdf_pred.reshape(B, nx, ny, nz)  # (B, nx, ny, nz)
         
-        # get meshes
-        pred_tsdfs = self.postprocess(tsdf_pred, self.origin) # batch['origin']
-        trgt_tsdfs = self.postprocess(tsdf_trgt, self.origin) # batch['origin']
+        #self.origin = batch['origin']
+        is_last_batch = (batch_idx == len(self.trainer.test_dataloaders) - 1)
+        total_loss = self.process_step(batch, 'test', is_last_batch=is_last_batch)
 
-        pred_mesh = pred_tsdfs[0].get_mesh()
-        trgt_mesh = trgt_tsdfs[0].get_mesh()
-
-        # log to wandb
-        #self.logger.log_mesh(pred_mesh, 'test_pred_mesh')  # TODO: instead render images of mesh and log them
-        #self.logger.log_mesh(trgt_mesh, 'test_trgt_mesh')
-
-        # log locally (for debugging)
-        self.logger.local.log_tsdf(pred_tsdfs[0], f'test_tsdf/test_pred_tsdf')
-        self.logger.local.log_tsdf(trgt_tsdfs[0], f'test_tsdf/test_trgt_tsdf')
-        self.logger.local.log_mesh(pred_mesh, f'test_mesh/test_pred_mesh')
-        self.logger.local.log_mesh(trgt_mesh, f'test_mesh/test_trgt_mesh')
-        self.logger.local.log_tensor(corner_xyz, f'test_mesh/corner_points')
-        self.logger.local.log_tensor(grid_xyz, f'test_mesh/grid_points')
+        B = batch['image'].shape[0]
+        self.log_loss(total_loss, B, 'test')
+        
+        # visualize the prediction of the final batch and log it
+        if is_last_batch:
+            self.geometric_reconstruction(batch, b_idx=0)  # assumes batch_size=1
 
         return #total_loss['combined']
 
 
-    def process_step(self, batch, mode):
+    def process_step(self, batch, mode, is_last_batch=False):
         image = batch['image'] # (B, T, 3, H, W)
         depth = batch['depth'] # (B, T, H, W)
         pose = batch['pose']  # (B, T, 4, 4) camera2world
@@ -581,7 +558,7 @@ class GenNerf(L.LightningModule):
 
             sampled_xyz.requires_grad_(True)
 
-            if mode=='test':
+            if mode=='test' and is_last_batch:
                 #xyz = get_3d_points(image, depth, projection)                
                 #self.logger.local.log_tensor(xyz, f'frustum_sampling/all_points_{i}')
                 self.logger.local.log_tensor(sampled_xyz, f'frustum_sampling/sampled_points_{i}')
@@ -604,28 +581,93 @@ class GenNerf(L.LightningModule):
         #raise Exception()
         return total_loss
     
-    def test_grad(self, input, output=None):
-        print("test gradients:")
+    def geometric_reconstruction(self, batch, b_idx=0):
         
-        x_b = input  # (N, 3)
-        print("x:", x_b.shape)
-        print("x_grad:", x_b.grad_fn)
-        print("x_grad:", x_b.requires_grad)
+        # get tsdfs
+        tsdf_vol_pred = self.predict_tsdf(batch) # (B, nx, ny, nz)
+        tsdf_vol_trgt = batch['vol_%02d_tsdf'%self.voxel_sizes[0]].squeeze(1)  # (B, nx, ny, nz)
+
+        # get tsdf objs
+        tsdf_pred = self.postprocess_tsdf(tsdf_vol_pred, self.origin)
+        tsdf_trgt = self.postprocess_tsdf(tsdf_vol_trgt, self.origin)
+
+        # get meshes
+        meshes_pred = self.extract_mesh(tsdf_pred) # batch['origin']
+        meshes_trgt = self.extract_mesh(tsdf_trgt) # batch['origin']
         
-        if output == None:
-            return
-        y_b = output  # (N, 1)
-        print("y:", y_b.shape)
-        print("y_grad:", y_b.grad_fn)
-        print("y_grad:", y_b.requires_grad)
+        # log locally (for debugging)
+        self.logger.local.log_tsdf(tsdf_pred[b_idx], f'test_tsdf/test_pred_tsdf')
+        self.logger.local.log_tsdf(tsdf_trgt[b_idx], f'test_tsdf/test_trgt_tsdf')
+        self.logger.local.log_mesh(meshes_pred[b_idx], f'test_mesh/test_pred_mesh')
+        self.logger.local.log_mesh(meshes_pred[b_idx], f'test_mesh/test_trgt_mesh')
         
-        gradients = torch.autograd.grad(
-            outputs=y_b,  # prediction
-            inputs=x_b,  # query
-            grad_outputs=torch.ones_like(y_b),  # Grad output for autograd
-            create_graph=True,
-            retain_graph=True,
-            only_inputs=True,
-            allow_unused=True
-        )[0]
-        print("result gradients:", gradients)
+        # log to wandb
+        #self.logger.log_mesh(pred_mesh, 'test_pred_mesh')
+        #self.logger.log_mesh(trgt_mesh, 'test_trgt_mesh')
+        self.log_rendered_images(meshes_pred, meshes_trgt, batch, b_idx)
+
+    
+    def log_rendered_images(self, meshes_pred, meshes_trgt, batch, b_idx=0):
+        image = batch['image'] # (B, T, 3, H, W)
+        depth = batch['depth'] # (B, T, H, W)
+        pose = batch['pose']  # (B, T, 4, 4) camera2world
+        intrinsics = batch['intrinsics']  # (B, T, 3, 3)
+        B, T, _, H, W = image.shape
+
+        # transpose batch and time so we can go through sequentially
+        # (B, T, 3, H, W) -> (T, B, C, H, W)
+        images = image.transpose(0,1)
+        #depths = depth.transpose(0,1)
+        poses = pose.transpose(0,1)
+        intrinsicss = intrinsics.transpose(0,1)
+
+        overview_pose = compute_camera_pose(meshes_trgt[b_idx], intrinsicss[0][b_idx], W, H, margin=0.8)
+        renderer_pred, scene_pred = get_renderer(meshes_pred[b_idx], W, H, color=(0.75, 0.75, 0.75), light_pose=overview_pose)
+        renderer_trgt, scene_trgt = get_renderer(meshes_trgt[b_idx], W, H, color=(0.75, 0.75, 0.75), light_pose=overview_pose)
+
+        caption = ['image', 'trgt_mesh', 'pred_mesh']
+
+        for i, (image, pose, intrinsics) in enumerate(zip(images, poses, intrinsicss)):
+            
+            if i == 0:
+                # add overview image of meshes
+                color_ov_img_pred, _ = render(renderer_pred, scene_pred, intrinsics[b_idx], overview_pose)
+                color_ov_img_trgt, _ = render(renderer_trgt, scene_trgt, intrinsics[b_idx], overview_pose)
+                self.logger.log_image(key=batch['scene'][b_idx], images=[color_ov_img_trgt, color_ov_img_pred], caption=caption[1:3])
+            
+            # add near images of meshes
+            color_img_pred, _ = render(renderer_pred, scene_pred, intrinsics[b_idx], pose[b_idx])
+            color_img_trgt, _ = render(renderer_trgt, scene_trgt, intrinsics[b_idx], pose[b_idx])
+            self.logger.log_image(key=f'frame{i}', images=[image[b_idx], color_img_trgt, color_img_pred], caption=caption)
+
+
+    def predict_tsdf(self, batch):
+
+        # get dimensions from target tsdf
+        tsdf_trgt = batch['vol_%02d_tsdf'%self.voxel_sizes[0]]  # (B, 1, nx, ny, nz)
+        tsdf_trgt = tsdf_trgt.squeeze(1)  # (B, nx, ny, nz)
+        B, nx, ny, nz = tsdf_trgt.shape
+        volume_size = self.cfg.voxel_size * np.array(self.cfg.voxel_dim_test)
+        device = tsdf_trgt.device
+        
+        # sample grid points
+        grid_xyz = get_grid_coordinates(nx, ny, nz, volume_size, self.origin, device=device)  # (nx, ny, nz, 3)
+        grid_xyz = grid_xyz.reshape(-1, 3)  # (N, 3)
+        grid_xyz = grid_xyz.unsqueeze(0)  # (B=1, N, 3)
+        #grid_points = grid_points.repeat(B, 1, 1)  # (B, N, 3)  # opt. repeat B times
+        grid_xyz.requires_grad_(True)
+
+        # get predicted tsdf
+        outputs = self.forward(grid_xyz)
+        tsdf_pred = outputs['tsdf']  # (B, N, 1)
+        tsdf_pred = tsdf_pred.reshape(B, nx, ny, nz)  # (B, nx, ny, nz)
+
+        # debug logging
+        #print("vol-dims:", nx, ny, nz)
+        #print("vol-size:", volume_size)
+        #print("self.origin:", self.origin)
+        corner_xyz = get_corner_coordinates(volume_size, self.origin, device=device)
+        self.logger.local.log_tensor(corner_xyz, f'test_mesh/corner_points')
+        #self.logger.local.log_tensor(grid_xyz, f'test_mesh/grid_points')
+        
+        return tsdf_pred
