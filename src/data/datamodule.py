@@ -193,7 +193,7 @@ class ScannetDataModule(LightningDataModule):
             raise NotImplementedError(f"Usage of unknown mode: {self.hparams.dataset_type}")
         print(f"Test dataset len: {len(dataset)} (scenes: {len(dataset.info_files)})")
 
-        dataloader = torch.utils.data.DataLoader(
+        dataloader = DataLoader(
             dataset, batch_size=1, num_workers=self.hparams.num_workers_test, collate_fn=collate_fn,
             shuffle=self.hparams.shuffle_test, drop_last=False, pin_memory=self.hparams.pin_memory
         )

@@ -77,6 +77,8 @@ class LocalPoolPointnet(nn.Module):
         # scatter plane features from points
         fea_plane = c.new_zeros(p.size(0), self.c_dim, self.reso_plane**2)
         c = c.permute(0, 2, 1) # B x 512 x T
+        c = c.float()  # fixes nan values
+        fea_plane = fea_plane.float()  # fixes nan values
         fea_plane = scatter_mean(c, index, out=fea_plane) # B x 512 x reso^2
         fea_plane = fea_plane.reshape(p.size(0), self.c_dim, self.reso_plane, self.reso_plane) # sparce matrix (B x 512 x reso x reso)
 

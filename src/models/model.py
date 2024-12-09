@@ -584,12 +584,12 @@ class GenNerf(L.LightningModule):
     def geometric_reconstruction(self, batch, b_idx=0):
         
         # get tsdfs
-        tsdf_vol_pred = self.predict_tsdf(batch) # (B, nx, ny, nz)
-        tsdf_vol_trgt = batch['vol_%02d_tsdf'%self.voxel_sizes[0]].squeeze(1)  # (B, nx, ny, nz)
-
+        tsdf_pred = self.predict_tsdf(batch) # (B, nx, ny, nz)
+        tsdf_trgt = batch['vol_%02d_tsdf'%self.voxel_sizes[0]].squeeze(1)  # (B, nx, ny, nz)
+        
         # get tsdf objs
-        tsdf_pred = self.postprocess_tsdf(tsdf_vol_pred, self.origin)
-        tsdf_trgt = self.postprocess_tsdf(tsdf_vol_trgt, self.origin)
+        tsdf_pred = self.postprocess_tsdf(tsdf_pred, self.origin)
+        tsdf_trgt = self.postprocess_tsdf(tsdf_trgt, self.origin)
 
         # get meshes
         meshes_pred = self.extract_mesh(tsdf_pred) # batch['origin']
@@ -599,7 +599,7 @@ class GenNerf(L.LightningModule):
         self.logger.local.log_tsdf(tsdf_pred[b_idx], f'test_tsdf/test_pred_tsdf')
         self.logger.local.log_tsdf(tsdf_trgt[b_idx], f'test_tsdf/test_trgt_tsdf')
         self.logger.local.log_mesh(meshes_pred[b_idx], f'test_mesh/test_pred_mesh')
-        self.logger.local.log_mesh(meshes_pred[b_idx], f'test_mesh/test_trgt_mesh')
+        self.logger.local.log_mesh(meshes_trgt[b_idx], f'test_mesh/test_trgt_mesh')
         
         # log to wandb
         #self.logger.log_mesh(pred_mesh, 'test_pred_mesh')
@@ -657,9 +657,18 @@ class GenNerf(L.LightningModule):
         #grid_points = grid_points.repeat(B, 1, 1)  # (B, N, 3)  # opt. repeat B times
         grid_xyz.requires_grad_(True)
 
-        # get predicted tsdf
-        outputs = self.forward(grid_xyz)
-        tsdf_pred = outputs['tsdf']  # (B, N, 1)
+        # get predicted tsdf#        
+        chunk_size = 10000
+        chunks = torch.split(grid_xyz, chunk_size, dim=1)  # split along N dimension
+        with torch.no_grad():
+            chunk_list = []
+            for chunk in chunks:
+                output = self.forward(chunk)
+                tsdf_pred = output['tsdf'].detach().cpu()
+                chunk_list.append(tsdf_pred)
+        tsdf_pred = torch.cat(chunk_list, dim=1)
+        #outputs = self.forward(grid_xyz)
+        #tsdf_pred = outputs['tsdf']  # (B, N, 1)
         tsdf_pred = tsdf_pred.reshape(B, nx, ny, nz)  # (B, nx, ny, nz)
 
         # debug logging
