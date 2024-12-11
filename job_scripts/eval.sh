@@ -1,7 +1,7 @@
 #!/bin/bash -l
 
 # Name
-#SBATCH --job-name=train_geometric
+#SBATCH --job-name=eval_geometric
 
 # Settings
 #SBATCH --mail-type=NONE
@@ -12,7 +12,7 @@
 #SBATCH --error=/home/hpc/g101ea/g101ea13/job_out/slurm_job_%A.err
 
 # Hardware
-#SBATCH --gres=gpu:a40:4
+#SBATCH --gres=gpu:a40:1
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 
@@ -22,7 +22,7 @@
 # SBATCH --mem-per-cpu=3250M  # outdated
 
 # Max time (hh:mm:ss)
-#SBATCH --time=02:00:00
+#SBATCH --time=01:00:00  # 08:00:00
 
 # load modules
 unset SLURM_EXPORT_ENV
@@ -51,7 +51,7 @@ PROJECT=. # i.e. $HOME/workspace/gennerf/gen-nerf
 ARGS=${@:1}
 
 # execute
-CMD="python $PROJECT/src/train.py $ARGS"
+CMD="python $PROJECT/src/eval.py $ARGS"
 
 echo ${CMD}
 ${CMD}

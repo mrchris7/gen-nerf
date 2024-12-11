@@ -1,0 +1,23 @@
+# @package _global_
+
+defaults:
+  - _self_
+  - data: default
+  - model: gen_nerf
+  - logger: null
+  - trainer: default  # use 1 device for accurate reproduction when testing
+  - paths: default
+  - extras: default
+  - hydra: default
+
+  - callbacks: null
+  - experiment: null
+
+task_name: "eval"
+
+tags: ["dev"]
+
+experiment: None
+
+# passing checkpoint path is necessary for evaluation
+ckpt_path: ???
