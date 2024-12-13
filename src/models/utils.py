@@ -199,7 +199,7 @@ def farthest_point_sample(xyz, npoint):
     for i in range(npoint):
         centroids[:, i] = farthest
         centroid = xyz[batch_indices, farthest, :].view(B, 1, 3)
-        dist = torch.sum((xyz - centroid) ** 2, -1).to(distance.dtype)
+        dist = torch.sum((xyz - centroid) ** 2, -1).to(device)
         mask = dist < distance
         distance[mask] = dist[mask]
         farthest = torch.max(distance, -1)[1]
@@ -233,7 +233,7 @@ def smooth_log_transform(x, shift=1, beta=1):
     return torch.tanh(x) * torch.nn.functional.softplus(x.abs() / shift, beta=beta)
 
 
-def gaussian_kernel(kernel_size, sigma):
+def gaussian_kernel(kernel_size, sigma, device):
     """Generates a 2D Gaussian kernel."""
     # create a 1D tensor with equally spaced values centered at 0
     x = torch.linspace(-(kernel_size // 2), kernel_size // 2, kernel_size)
@@ -244,7 +244,7 @@ def gaussian_kernel(kernel_size, sigma):
     gauss_2d = torch.outer(gauss_1d, gauss_1d)
     # additional dim for compatibility with conv2d
     gauss_2d = gauss_2d.unsqueeze(0).unsqueeze(0)
-    
+    gauss_2d = gauss_2d.to(device)
     return gauss_2d
 
 def apply_gaussian_smoothing(image, kernel_size, sigma):
@@ -262,7 +262,7 @@ def apply_gaussian_smoothing(image, kernel_size, sigma):
     B, C, H, W = image.shape
     
     # create a gaussian kernel (1, 1, kernel_size, kernel_size)
-    kernel = gaussian_kernel(kernel_size, sigma).to(image.device)
+    kernel = gaussian_kernel(kernel_size, sigma, device=image.device)
     
     # repeat the kernel for each channel in the batch
     kernel = kernel.repeat(C, 1, 1, 1)  # (C, 1, kernel_size, kernel_size)
@@ -273,7 +273,7 @@ def apply_gaussian_smoothing(image, kernel_size, sigma):
     
     return smoothed_image
 
-
+'''
 def unproj_map(width, height, f, c=None, device="cpu"):
     """
     Get camera unprojection map for given image size.
@@ -333,7 +333,7 @@ def gen_rays(poses, width, height, focal, z_near, z_far, c=None):
     cam_nears = torch.tensor(z_near, device=device).view(1, 1, 1, 1).expand(num_images, height, width, -1)
     cam_fars = torch.tensor(z_far, device=device).view(1, 1, 1, 1).expand(num_images, height, width, -1)
     return torch.cat((cam_centers, cam_raydir, cam_nears, cam_fars), dim=-1)  # (B, H, W, 8)
-
+'''
 
 def sample_points_from_bounding_box(xyz, num_samples):
     """
@@ -1130,6 +1130,3 @@ def grid_sample_3d(image, optical):
 
     return out_val
 
-
-def merge_feature_planes(plane_1, plane_2):
-    return plane_1

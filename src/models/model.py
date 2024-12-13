@@ -12,6 +12,7 @@ from src.models.components.pointnet import LocalPoolPointnet
 from src.models.components.spatial_encoder import SpatialEncoder
 from src.models.components.resnetfc import ResnetFC
 from src.models.components.heads3d import TSDFHeadSimple
+from src.models.components.plane_merger import FeaturePlaneMerger
 from src.models.utils import *
 from src.data.tsdf import TSDF
 from src.utils.visuals import *
@@ -37,6 +38,7 @@ class GenNerf(L.LightningModule):
             encoder_latent += [0, 64, 128, 256, 512, 1024][cfg.encoder.spatial.num_layers]
         if cfg.encoder.use_pointnet:
             self.pointnet = LocalPoolPointnet.from_conf(self.cfg.encoder.pointnet)
+            self.merger = FeaturePlaneMerger.from_conf(cfg.encoder.plane_merger, c_dim=cfg.encoder.pointnet.c_dim)
             encoder_latent += cfg.encoder.pointnet.c_dim
         if cfg.encoder.use_auxiliary:
             encoder_latent += 0 # self.cfg.f_teacher.feature_dim
@@ -47,11 +49,9 @@ class GenNerf(L.LightningModule):
             self.code = PositionalEncoding.from_conf(cfg.code, d_in=d_in)
             d_in = self.code.d_out
 
-        #self.mlp = ResnetFC.from_conf(cfg.mlp, d_in=d_in, d_latent=encoder_latent)
         self.mlp = ResnetFC.from_conf(cfg.mlp, d_in=encoder_latent, d_latent=d_in)
-        #self.head_geo = TSDFHead(cfg.head_geo, cfg.backbone3d.channels, cfg.voxel_size)  # # simpler head required that regresses tsdf-value from feature of point (instead of feature of whole volume)
         self.head_geo = TSDFHeadSimple(cfg.mlp.d_out_geo)
-        
+
         # other params
         self.origin = torch.tensor([0,0,0]).view(1,3)
         self.voxel_sizes = [int(cfg.voxel_size*100)]
@@ -67,21 +67,16 @@ class GenNerf(L.LightningModule):
         """
 
         # spatial encoder + f_teacher features -> backproject into voxel volume
-        self.volume = 0 
-        self.valid = 0
+        self.volume = None
+        self.valid = None
 
         # pointnet encoder
-        self.c_plane = 0
-
-
-    # TODO: ultimately this function should be callable multiple times allowing to
-    # accumulate information every time it is called
-    # -> currently PointNet does not support dynamic accumulation:
-    #    if encode() is run again, the initially used pointcloud is gone
+        self.c_plane = None
+    
     def encode(self, projection, image, depth, mode):
         """ Encodes image and corresponding pointcloud into a 3D feature volume and 
         accumulates them. This is the first half of the network which
-        is run on T frames.
+        is run on T frames. Can be called multiple times.
 
         Args:
             projection: (B, T, 4, 4) pose matrix
@@ -143,14 +138,14 @@ class GenNerf(L.LightningModule):
             #self.logger.local.log_tensor(xyz, 'sparse_points/dense_points')
             pass
 
-        # build volume using PointNet (currently it does not support dynamic accumulation)
+        # build volume using PointNet
         if self.cfg.encoder.use_pointnet:
             c_plane_new = self.pointnet(accum_sparse_xyz) # dict with keys 'xy', 'yz', 'xz' 
                                                           # each (B, c_dim=512?, plane_reso=128, plane_reso=128)
-            if not self.c_plane == 0:
-                self.c_plane = merge_feature_planes(c_plane_new, self.c_plane)
-            else:
+            if self.c_plane == None:
                 self.c_plane = c_plane_new
+            else:
+                self.c_plane = self.merger(c_plane_new, self.c_plane)
 
 
     def sample_plane_feature(self, p, c, plane='xz'):
@@ -262,6 +257,7 @@ class GenNerf(L.LightningModule):
             modules.append(self.spatial)
         if self.cfg.encoder.use_pointnet:
             modules.append(self.pointnet)
+            modules.append(self.merger)
         
         params = itertools.chain(*(module.parameters() 
                                         for module in modules))
@@ -345,7 +341,7 @@ class GenNerf(L.LightningModule):
         #loss = loss[mask_observed | mask_outside]  # penalize observed areas and areas behind walls (outside) to prevent artifacts behind walls
         loss = loss.mean()
         
-        return loss
+        return loss.to(self.device)
 
     '''
     def loss_smooth(self, outputs, targets):
@@ -368,7 +364,7 @@ class GenNerf(L.LightningModule):
                 loss += torch.mean((tsdf_i - neighbors_tsdf) ** 2)
         
         loss = loss / (B * N)
-        return loss.to(device)
+        return loss.type_as(pred, device=self.device)
     '''
     
     def loss_smooth(self, outputs, targets): 
@@ -402,7 +398,7 @@ class GenNerf(L.LightningModule):
         # mean squared difference
         loss = torch.mean(tsdf_diff ** 2)
 
-        return loss.to(device)
+        return loss.to(self.device)
 
 
     def loss_eikonal(self, outputs, targets):
@@ -431,8 +427,8 @@ class GenNerf(L.LightningModule):
         gradient_norm = gradients.norm(2, dim=-1)  # (B, N)
         
         # eikonal loss: |∇f(x)| - 1)^2, averaged over all points and batches
-        loss = ((gradient_norm - 1) ** 2).mean()        
-        return loss
+        loss = ((gradient_norm - 1) ** 2).mean()
+        return loss.to(self.device)
 
     def calculate_loss(self, outputs, targets):
         losses = {}
@@ -520,6 +516,7 @@ class GenNerf(L.LightningModule):
 
         self.initialize_volume()
         self.encode(projection, image, depth, mode)  # encode images of whole sequence at once
+        # TODO: test merging vs processing all observations at once
 
         # transpose batch and time so we can go through sequentially
         # (B, T, 3, H, W) -> (T, B, C, H, W)
