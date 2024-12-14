@@ -242,6 +242,7 @@ class GenNerf(L.LightningModule):
         outputs['feat_geo'] = feat_geo  # torch.identity(feat_geo)  # necessary?
         outputs['feat_sem'] = feat_sem  # torch.relu(feat_sem)    
         outputs['tsdf'] = tsdf
+        outputs['feat'] = feat
 
         return outputs
 
@@ -430,6 +431,12 @@ class GenNerf(L.LightningModule):
         loss = ((gradient_norm - 1) ** 2).mean()
         return loss.to(self.device)
 
+    def loss_feat_contribution(self, outputs, targets):
+        feat = outputs['feat']  # (B, N, d_endoder)
+        feat_contribution = torch.norm(feat, dim=-1).mean()
+        loss = (1 / feat_contribution)
+        return loss
+
     def calculate_loss(self, outputs, targets):
         losses = {}
         losses['tsdf'] = self.loss_tsdf(outputs, targets)
@@ -441,6 +448,9 @@ class GenNerf(L.LightningModule):
         if self.cfg.tsdf_loss.use_eikonal_reg:
             losses['eikonal'] = self.loss_eikonal(outputs, targets)
             losses['combined'] += self.cfg.tsdf_loss.eikonal_reg.weight * losses['eikonal']
+        if self.cfg.tsdf_loss.use_feature_reg:
+            losses['feature'] = self.loss_feat_contribution(outputs, targets)
+            losses['combined'] += self.cfg.tsdf_loss.feature_reg.weight * losses['feature']
 
         return losses
 
@@ -457,6 +467,8 @@ class GenNerf(L.LightningModule):
         if self.cfg.tsdf_loss.use_eikonal_reg:
             self.log(f'{mode}_loss_eikonal', loss['eikonal'], batch_size=B, sync_dist=True)
 
+        if self.cfg.tsdf_loss.use_feature_reg:
+            self.log(f'{mode}_loss_feature', loss['feature'], batch_size=B, sync_dist=True)
 
 
 

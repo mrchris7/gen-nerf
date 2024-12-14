@@ -95,6 +95,9 @@ tsdf_loss:
   use_eikonal_reg: False # no improvement
   eikonal_reg:
     weight: 0.01
+  use_feature_reg: False
+  feature_reg:
+    weight: 0.1
 
 
 # compile model for faster training with pytorch 2.0
