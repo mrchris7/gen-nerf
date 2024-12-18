@@ -22,7 +22,6 @@ class FeaturePlaneMerger(nn.Module):
         Returns:
             Merged feature planes as a dict with the same structure as the input.
         """
-        print("***self.strategy_", self.strategy)
         if self.strategy == 'average':
             return self.average_merge(plane_1, plane_2)
         elif self.strategy == 'learn':

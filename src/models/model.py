@@ -5,9 +5,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 import lightning as L
-from sklearn.neighbors import NearestNeighbors
 from src.models.components.positional_encoding import PositionalEncoding
-from torch_cluster import knn
 from src.models.components.pointnet import LocalPoolPointnet
 from src.models.components.spatial_encoder import SpatialEncoder
 from src.models.components.resnetfc import ResnetFC
@@ -86,7 +84,6 @@ class GenNerf(L.LightningModule):
         Feature volume is accumulated into self.volume and self.valid
         """
         B = projection.size(0)
-        device = image.device
        
         # transpose batch and time so we can accumulate sequentially
         # (B, T, 3, H, W) -> (T, B, C, H, W)
@@ -95,15 +92,15 @@ class GenNerf(L.LightningModule):
         projections = projection.transpose(0,1)
 
         # TODO: declare dimension T in advance (momory-efficient)
-        accum_sparse_xyz = torch.empty(B, 0, 3, device=device)  # accumulate point cloud for PointNet
-                                                                # (make it a persistent pointcloud with self.sparse_xyz -> memory intensive)
+        accum_sparse_xyz = torch.empty(B, 0, 3, device=self.device)  # accumulate point cloud for PointNet
+                                                                     # (make it a persistent pointcloud with self.sparse_xyz -> memory intensive)
         
         # go through every observation
         for image, depth, projection in zip(images, depths, projections):
             
             # accumulate 3D volume using spatial encoder on 2D data:
             B, C, H, W = image.size()
-            feat_2d = torch.empty(B, 0, H, W, device=device)  # feature map from spatial encoder is halved
+            feat_2d = torch.empty(B, 0, H, W, device=self.device)  # feature map from spatial encoder is halved
             #image = self.normalizer(image) # TODO: normalize?
 
             if self.cfg.encoder.use_spatial:
@@ -151,11 +148,11 @@ class GenNerf(L.LightningModule):
     def sample_plane_feature(self, p, c, plane='xz'):
         xy = normalize_coordinate(p.clone(), plane=plane, padding=self.cfg.encoder.pointnet.padding) # normalize to the range of (0, 1)
         xy = xy[:, :, None].float()
-        vgrid = 2.0 * xy - 1.0 # normalize to (-1, 1)
-        c = F.grid_sample(c, vgrid, padding_mode='border', align_corners=True, mode=self.cfg.encoder.pointnet.sample_mode).squeeze(-1)
-        #c = grid_sample_2d(c, vgrid)  # ONLY FOR: eikonal
-        #assert(c_check.shape == c.shape)
-        #assert(torch.allclose(c_check, c, atol=1e-3, rtol=1e-4))
+        vgrid = 2.0 * xy - 1.0 # normalize (-1, 1)
+        if self.cfg.loss.use_eikonal:
+            c = grid_sample_2d(c, vgrid)
+        else:
+            c = F.grid_sample(c, vgrid, padding_mode='border', align_corners=True, mode=self.cfg.encoder.pointnet.sample_mode).squeeze(-1)
         return c
 
     def map_features(self, xyz):
@@ -172,10 +169,9 @@ class GenNerf(L.LightningModule):
                 C = c_dim_spatial + c_dim_pointnet + c_dim_auxiliary
         """
         B, N, _ = xyz.size()
-        device = xyz.device
 
         # combine features from different encodings
-        feat = torch.empty(B, N, 0, device=device)
+        feat = torch.empty(B, N, 0, device=self.device)
         if self.cfg.encoder.use_pointnet:
             plane_type = list(self.c_plane.keys())
             feat_pointnet = 0
@@ -327,93 +323,69 @@ class GenNerf(L.LightningModule):
 
 
     def loss_tsdf(self, outputs, targets):
+        # Loss for TSDF values
+        # Adapted from Atlas: https://arxiv.org/abs/2003.10432
+
         pred = outputs['tsdf']  # [B, N, 1]
         trgt = targets['tsdf']  # [B, N, 1]
         
+        # optionally: create mask
         #mask_observed = trgt < 1
         #mask_outside  = (trgt == 1).all(-1, keepdim=True) # does not work in our case (vertical column is equal to 1)
                                                            # because trgt is not structured as a 3D grid but a point set
-        
-        if self.cfg.tsdf_loss.log_transform: # breaks gradient for eikonal loss calculation
-            pred = smooth_log_transform(pred, self.cfg.tsdf_loss.log_transform_shift, self.cfg.tsdf_loss.log_transform_beta)
-            trgt = smooth_log_transform(trgt, self.cfg.tsdf_loss.log_transform_shift, self.cfg.tsdf_loss.log_transform_beta)
+        if self.cfg.loss.tsdf.transform == 'log':
+            pred = log_transform(pred, self.cfg.loss.tsdf.shift)
+            trgt = log_transform(trgt, self.cfg.loss.tsdf.shift)
+        elif self.cfg.loss.tsdf.transform == 'smooth_log':
+            pred = smooth_log_transform(pred, self.cfg.loss.tsdf.shift, self.cfg.loss.tsdf.smoothness)
+            trgt = smooth_log_transform(trgt, self.cfg.loss.tsdf.shift, self.cfg.loss.tsdf.smoothness)
+        elif self.cfg.loss.tsdf.transform == 'none':
+            pass
+        else:
+            raise NotImplementedError(f"Usage of unknown log_trans mode: {self.cfg.loss.tsdf.transform}")
 
-        loss = F.l1_loss(pred, trgt, reduction='none') * self.cfg.tsdf_loss.weight
+        loss = F.l1_loss(pred, trgt, reduction='none')
+        
+        # optionally: apply mask
         #loss = loss[mask_observed | mask_outside]  # penalize observed areas and areas behind walls (outside) to prevent artifacts behind walls
-        loss = loss.mean()
         
-        return loss.to(self.device)
-
-    '''
-    def loss_smooth(self, outputs, targets):
-        pred = outputs['tsdf']  # [B, N, 1]
-        sampled_xyz = targets['sampled_xyz']
-        
-        device = pred.device
-        B, N, _ = pred.shape
-        loss = 0.0
-        for b in range(B):
-            p = sampled_xyz[b].detach().cpu().numpy()
-            nbrs = NearestNeighbors(n_neighbors=self.cfg.tsdf_loss.smoothness_reg.k, algorithm='ball_tree').fit(p)
-            distances, indices = nbrs.kneighbors(sampled_xyz[b].detach().cpu().numpy())
-
-            # calculate the difference in tsdf values between neighbors
-            tsdf_values = pred[b].squeeze(1)  # (N,)
-            for i in range(N):
-                tsdf_i = tsdf_values[i]  # tsdf value of the ith point
-                neighbors_tsdf = tsdf_values[indices[i]]  # tsdf values of the neighbors
-                loss += torch.mean((tsdf_i - neighbors_tsdf) ** 2)
-        
-        loss = loss / (B * N)
-        return loss.type_as(pred, device=self.device)
-    '''
+        return loss
     
-    def loss_smooth(self, outputs, targets): 
+    def loss_isdf(self, outputs, targets):
+        # Combined loss originally used for TSDF values
+        # Adapted from iSDF: https://arxiv.org/abs/2204.02296
+
         pred = outputs['tsdf']  # [B, N, 1]
-        sampled_xyz = targets['sampled_xyz']  # [B, N, 3]
-    
-        device = pred.device
-        B, N, _ = pred.shape
-        k = self.cfg.tsdf_loss.smoothness_reg.k
+        trgt = targets['tsdf']  # [B, N, 1]
 
-        # flatten the batched tensors to treat them as one large point cloud
-        p = sampled_xyz.view(-1, 3).float().cpu()  # [B * N, 3]  # use cpu fallback, cuda not supported
-        tsdf_values = pred.view(-1).cpu()  # [B * N]  # use cpu fallback, cuda not supported
+        # free space loss
+        factor = self.cfg.loss.isdf.free_space_factor
+        term1 = torch.exp(-factor * pred) - 1.0 
+        term2 = pred - trgt
+        loss_free_space = torch.max(
+            torch.nn.functional.relu(term1),  # ensure non-negative
+            term2
+        )
+        
+        # near surface loss
+        loss_near_surf = F.l1_loss(pred, trgt, reduction='none')
+        loss_near_surf *= self.cfg.loss.isdf.trunc_weight
 
-        # create a batch index tensor to track the batch of each point
-        batch_idx = torch.arange(B, device=p.device).repeat_interleave(N)  # [B * N]
-
-        # use torch-cluster's knn to find the k-nearest neighbors for each point
-        neighbors_idx = knn(p, p, k=k, batch_x=batch_idx, batch_y=batch_idx)
-
-        # output of knn: (2, num_edges)
-        source_points = neighbors_idx[0]  # indices of the original points
-        neighbor_points = neighbors_idx[1]  # indices of their neighbors
-
-        # gather the tsdfs of the neighbors
-        neighbor_tsdf_values = tsdf_values[neighbor_points]  # [B * N * k]
-
-        # compute the difference between each point's tsdf value and its neighbors
-        tsdf_diff = tsdf_values[source_points] - neighbor_tsdf_values
-
-        # mean squared difference
-        loss = torch.mean(tsdf_diff ** 2)
-
-        return loss.to(self.device)
-
+        # combine losses
+        mask = (trgt <= 1.0).float()
+        loss = mask * loss_near_surf + (1 - mask) * loss_free_space
+        return loss
 
     def loss_eikonal(self, outputs, targets):
         # Eikonal term to encourage unit gradient norm
-        # tsdf: (B, N, 1)
-        # query_points: (B, N, 3)
+        # Adapted from: https://arxiv.org/abs/2002.10099
 
         pred = outputs['tsdf']  # [B, N, 1]
+        trgt = targets['tsdf']  # [B, N, 1]
         sampled_xyz = targets['sampled_xyz']
-                   
-        # Make sure tsdf_values have the right shape for grad_outputs
-        grad_outputs = torch.ones_like(pred)
+        grad_outputs = torch.ones_like(pred, requires_grad=False, device=pred.device)
 
-        # Compute the gradient of the TSDF with respect to the input points
+        # compute the gradient of the TSDF with respect to the input points
         gradients = torch.autograd.grad(
             outputs=pred,
             inputs=sampled_xyz,
@@ -422,16 +394,20 @@ class GenNerf(L.LightningModule):
             retain_graph=True,
             only_inputs=True
         )[0]  # (B, N, 3)
-        
-        # norm of each gradient vector for all points in the batch
-        # gradients.norm(2, dim=-1) computes the L2 norm across the last dimension (x, y, z)
+
         gradient_norm = gradients.norm(2, dim=-1)  # (B, N)
+        loss = (torch.abs(gradient_norm - 1)).unsqueeze(-1) # [B, N, 1]
+        dist = self.cfg.loss.eikonal.apply_distance
+        loss[trgt < dist] = 0.
+        return loss
         
         # eikonal loss: |∇f(x)| - 1)^2, averaged over all points and batches
         loss = ((gradient_norm - 1) ** 2).mean()
         return loss.to(self.device)
 
     def loss_feat_contribution(self, outputs, targets):
+
+    def loss_feat(self, outputs, targets):
         feat = outputs['feat']  # (B, N, d_endoder)
         feat_contribution = torch.norm(feat, dim=-1).mean()
         loss = (1 / feat_contribution)
@@ -439,35 +415,56 @@ class GenNerf(L.LightningModule):
 
     def calculate_loss(self, outputs, targets):
         losses = {}
-        losses['tsdf'] = self.loss_tsdf(outputs, targets)
-        losses['combined'] = losses['tsdf']
-
-        if self.cfg.tsdf_loss.use_smoothness_reg:
-            losses['smooth'] = self.loss_smooth(outputs, targets)
-            losses['combined'] += self.cfg.tsdf_loss.smoothness_reg.weight * losses['smooth']
-        if self.cfg.tsdf_loss.use_eikonal_reg:
-            losses['eikonal'] = self.loss_eikonal(outputs, targets)
-            losses['combined'] += self.cfg.tsdf_loss.eikonal_reg.weight * losses['eikonal']
-        if self.cfg.tsdf_loss.use_feature_reg:
-            losses['feature'] = self.loss_feat_contribution(outputs, targets)
-            losses['combined'] += self.cfg.tsdf_loss.feature_reg.weight * losses['feature']
-
+        loss_mat = None
+        
+        # main losses
+        assert self.cfg.loss.use_tsdf or self.cfg.loss.use_isdf
+        if self.cfg.loss.use_tsdf:
+            loss_tsdf_mat = self.loss_tsdf(outputs, targets)
+            losses['tsdf'] = loss_tsdf_mat.mean()
+            loss_tsdf_mat_w = self.cfg.loss.tsdf.weight * loss_tsdf_mat
+            if loss_mat == None:
+                loss_mat = loss_tsdf_mat_w
+            else:
+                loss_mat += loss_tsdf_mat_w
+        if self.cfg.loss.use_isdf:
+            loss_isdf_mat = self.loss_isdf(outputs, targets)
+            losses['isdf'] = loss_isdf_mat.mean()
+            loss_isdf_mat_w = self.cfg.loss.isdf.weight * loss_isdf_mat
+            if loss_mat == None:
+                loss_mat = loss_isdf_mat_w
+            else:
+                loss_mat += loss_isdf_mat_w
+        
+        # additional losses and regularizations
+        if self.cfg.loss.use_eikonal:
+            eik_loss_mat = self.loss_eikonal(outputs, targets)
+            losses['eikonal'] = eik_loss_mat.mean()
+            loss_mat += self.cfg.loss.eikonal.weight * eik_loss_mat
+        if self.cfg.loss.use_feature:
+            feat_loss_mat = self.loss_feat(outputs, targets)
+            losses['feature'] = feat_loss_mat.mean()
+            loss_mat += self.cfg.loss.feature.weight * feat_loss_mat
+        
+        losses['combined'] = loss_mat.mean()
         return losses
 
     def log_loss(self, loss, B, mode):
         if len(loss.keys()) == 0:
             return
 
-        self.log(f'{mode}_loss_tsdf', loss['tsdf'], batch_size=B, sync_dist=True)
         self.log(f'{mode}_loss', loss['combined'], batch_size=B, sync_dist=True)
-        
-        if self.cfg.tsdf_loss.use_smoothness_reg:
-            self.log(f'{mode}_loss_smooth', loss['smooth'], batch_size=B, sync_dist=True)
 
-        if self.cfg.tsdf_loss.use_eikonal_reg:
+        if self.cfg.loss.use_tsdf:
+            self.log(f'{mode}_loss_tsdf', loss['tsdf'], batch_size=B, sync_dist=True)
+        
+        if self.cfg.loss.use_isdf:
+            self.log(f'{mode}_loss_isdf', loss['isdf'], batch_size=B, sync_dist=True)
+
+        if self.cfg.loss.use_eikonal:
             self.log(f'{mode}_loss_eikonal', loss['eikonal'], batch_size=B, sync_dist=True)
 
-        if self.cfg.tsdf_loss.use_feature_reg:
+        if self.cfg.loss.use_feature:
             self.log(f'{mode}_loss_feature', loss['feature'], batch_size=B, sync_dist=True)
 
 
@@ -558,7 +555,7 @@ class GenNerf(L.LightningModule):
                                                     img_height=H)
                 xyz = get_3d_points(image, depth, projection)
                 surface_xyz = farthest_point_sample(xyz, self.cfg.frustum.M)
-                noise = torch.normal(mean=0.0, std=self.cfg.frustum.sigma, size=surface_xyz.shape, device=surface_xyz.device)
+                noise = torch.normal(mean=0.0, std=self.cfg.frustum.sigma, size=surface_xyz.shape, device=self.device)
                 surface_xyz += noise
                 sampled_xyz = torch.cat((free_xyz, surface_xyz), dim=1)
 
@@ -581,7 +578,7 @@ class GenNerf(L.LightningModule):
             targets = {}
             targets['tsdf'] = trilinear_interpolation(tsdf_vol.permute(0, 2, 3, 4, 1), sampled_xyz, self.origin.squeeze(), self.cfg.voxel_size)
             targets['sampled_xyz'] = sampled_xyz
-            if mode == 'test' and self.cfg.tsdf_loss.use_eikonal_reg:
+            if mode == 'test' and self.cfg.loss.use_eikonal:
                 # eikonal loss not working due to missing grad_fn during test mode
                 loss = {}
             else:
@@ -657,10 +654,9 @@ class GenNerf(L.LightningModule):
         tsdf_trgt = tsdf_trgt.squeeze(1)  # (B, nx, ny, nz)
         B, nx, ny, nz = tsdf_trgt.shape
         volume_size = self.cfg.voxel_size * np.array(self.cfg.voxel_dim_test)
-        device = tsdf_trgt.device
         
         # sample grid points
-        grid_xyz = get_grid_coordinates(nx, ny, nz, volume_size, self.origin, device=device)  # (nx, ny, nz, 3)
+        grid_xyz = get_grid_coordinates(nx, ny, nz, volume_size, self.origin, device=self.device)  # (nx, ny, nz, 3)
         grid_xyz = grid_xyz.reshape(-1, 3)  # (N, 3)
         grid_xyz = grid_xyz.unsqueeze(0)  # (B=1, N, 3)
         #grid_points = grid_points.repeat(B, 1, 1)  # (B, N, 3)  # opt. repeat B times
@@ -684,7 +680,7 @@ class GenNerf(L.LightningModule):
         #print("vol-dims:", nx, ny, nz)
         #print("vol-size:", volume_size)
         #print("self.origin:", self.origin)
-        corner_xyz = get_corner_coordinates(volume_size, self.origin, device=device)
+        corner_xyz = get_corner_coordinates(volume_size, self.origin, device=self.device)
         self.logger.local.log_tensor(corner_xyz, f'test_mesh/corner_points')
         #self.logger.local.log_tensor(grid_xyz, f'test_mesh/grid_points')
         

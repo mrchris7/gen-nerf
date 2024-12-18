@@ -28,7 +28,7 @@ trainer:
 
 model:
   optimizer:
-    lr: 0.001 # 0.0001
+    lr: 0.0001 # 0.0001
     weight_decay: 0.0001
   scheduler:
     step_size: 400
@@ -63,18 +63,29 @@ model:
     freq_factor: 0.5
     include_input: True
 
-  tsdf_loss:
-    weight: 1.0
-    log_transform: True
-    log_transform_shift: 15.0
-    log_transform_beta: 10.0
-    use_smoothness_reg: False
-    smoothness_reg:
+  loss:
+    use_tsdf: False
+    tsdf:
+      weight: 1.0
+      transform: 'smooth_log'
+      shift: 15.0
+      smoothness: 10.0
+
+    use_isdf: True
+    isdf:
+      weight: 1.0
+      free_space_factor: 5
+      trunc_weight: 5
+
+    use_eikonal: True
+    eikonal:
+      weight: 0.25
+      apply_distance: 0.1
+
+    use_feature: False
+    feature:
       weight: 0.1
-      k: 3
-    use_eikonal_reg: False
-    eikonal_reg:
-      weight: 0.01
+
 
 data:
   datasets_train: ['/scans/scene0001_01/info.json', '/scans/scene0002_00/info.json', '/scans/scene0012_00/info.json', '/scans/scene0013_00/info.json', '/scans/scene0022_00/info.json']
@@ -84,12 +95,12 @@ data:
   num_workers_train: 7
   num_workers_val: 7
   num_workers_test: 7
-  batch_size_train: 8  # Needs to be divisible by the number of devices
+  batch_size_train: 1  # Needs to be divisible by the number of devices
   
   sequence_amount_train: 1.0  # controls the number of sequences scene-denpendently
   sequence_amount_val: 1.0    # num_sequences = sequence_amount * (num_scene_frames / sequence_length)
   sequence_amount_test: 1.0
-  sequence_length: 100 # number of raw frames to be considered as one sequence
+  sequence_length: 50 # number of raw frames to be considered as one sequence
   sequence_locations: 'evenly_spaced' # 'free' or 'fixed' or 'evenly_spaced'
   sequence_order: 'random'  # 'random' or 'sorted' (only effective if shuffle=False)
   num_frames_train: 1  # number of frames to select from a sequence
@@ -99,9 +110,9 @@ data:
   frame_order: 'random'  # 'random' or 'sorted'
   
   voxel_size: .04
-  voxel_dim_train: [200, 200, 50] # [160, 160, 64]
-  voxel_dim_val: [200, 200, 50] # [256, 256, 96]
-  voxel_dim_test: [200, 200, 50] # [416, 416, 128]
+  voxel_dim_train: [190, 180, 50] # [160, 160, 64]
+  voxel_dim_val: [190, 180, 50] # [256, 256, 96]
+  voxel_dim_test: [190, 180, 50] # [416, 416, 128]
 
 logger:
   wandb_local:
