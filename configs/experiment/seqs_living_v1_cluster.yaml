@@ -8,13 +8,13 @@ defaults:
   - override /model: gen_nerf
   - override /callbacks: default
   - override /logger: null
-  - override /trainer: gpu
-  - override /paths: default
+  - override /trainer: ddp
+  - override /paths: cluster
 
 # all parameters below will be merged with parameters from default configurations set above
 # this allows you to overwrite only specified parameters
 
-tags: ['dev', 'local', 'seqs', 'living', 'geometric']
+tags: ['dev', 'cluster', 'seqs', 'living', 'geometric', 'C']
 
 seed: 0
 
@@ -63,18 +63,28 @@ model:
     freq_factor: 0.5
     include_input: True
 
-  tsdf_loss:
+loss:
+  use_tsdf: True
+  tsdf:
     weight: 1.0
-    log_transform: True
-    log_transform_shift: 15.0
-    log_transform_beta: 10.0
-    use_smoothness_reg: False
-    smoothness_reg:
-      weight: 0.1
-      k: 3
-    use_eikonal_reg: False
-    eikonal_reg:
-      weight: 0.01
+    transform: 'smooth_log'
+    shift: 15.0
+    smoothness: 10.0
+
+  use_isdf: False
+  isdf:
+    weight: 1.0
+    free_space_factor: 5
+    trunc_weight: 5
+
+  use_eikonal: False
+  eikonal:
+    weight: 0.25
+    apply_distance: 0.1
+    
+  use_feature: False
+  feature:
+    weight: 0.1
 
 data:
   datasets_train: ['scannet_living_train.txt']
