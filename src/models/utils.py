@@ -1,13 +1,11 @@
 import functools
-import os
 import numpy as np
-import wandb
 import torch
 import torch.nn.functional as F
 from torch import nn
 from scipy.interpolate import RegularGridInterpolator
 from src.data.tsdf import coordinates
-import tempfile
+from src.utils.visuals import visualize_surface_and_connections
 
 
 def read_matrix(file_path):
@@ -117,18 +115,16 @@ def normalize_3d_coordinate(p, padding=0.1):
     return p_nor
 
 
-def get_3d_points(image, depth_map, projection):
+def get_3d_points(depth_map, projection):
     """
     Parameters:
-        image (B, 3, H, W)
         depth_map (B, H, W)
         projection (B, 3, 4): world2image projection
     Returns:
-        (B, N, 3): 3D points in world coordinates
+        (B, H, W, 3): 3D points in world coordinates
     """
-    B, C, H, W = image.shape
-
-    device = image.device
+    B, H, W = depth_map.shape
+    device = depth_map.device
 
     # generate a grid of coordinates
     u = torch.arange(0, W, device=device).view(1, -1).expand(H, -1)
@@ -149,9 +145,6 @@ def get_3d_points(image, depth_map, projection):
     # convert uv1 to 3D points using depth
     points_2d = uv1 * depth_map_flat.unsqueeze(-1)  # Shape: (B, N, 3)!
 
-    # reshape images to (B, H*W, 3)
-    images_flat = image.permute(0, 2, 3, 1).view(B, -1, 3)  # Shape: (B, N, 3)!
-
     # get projection matrix in shape by adding row [0, 0, 0, 1]: (B, 3, 4) -> (B, 4, 4)!
     # create the bottom row to be appended
     bottom_row = torch.tensor([0, 0, 0, 1], dtype=projection.dtype, device=projection.device)
@@ -164,9 +157,6 @@ def get_3d_points(image, depth_map, projection):
 
     # inverse of the projection matrix
     inv_proj_matrix = torch.inverse(projection_hom)  # Shape: (B, 4, 4)!
-
-    # add an extra dimension to match the batch size
-    inv_proj_matrix = inv_proj_matrix  # Shape: (B, 4, 4)!
     
     # convert 2D points to homogeneous coordinates
     points_2d_hom = torch.cat((points_2d, torch.ones_like(points_2d[..., :1])), dim=-1)  # Shape: (B, N, 4)
@@ -177,9 +167,10 @@ def get_3d_points(image, depth_map, projection):
     # normalize homogeneous coordinates
     points_3d = points_3d_hom[..., :3] / points_3d_hom[..., 3:4]  # Shape: (B, N, 3)
 
-    # TODO: maybe exclude points with bad depth?
     assert(tuple(points_3d.shape) == (B, H*W, 3))
-    return points_3d #, images_flat
+    
+    points_3d = points_3d.reshape(B, H, W, 3)
+    return points_3d
 
 
 def farthest_point_sample(xyz, npoint):
@@ -189,6 +180,7 @@ def farthest_point_sample(xyz, npoint):
         npoint: number of samples
     Return:
         sampled_xyz: sparse pointcloud data [B, npoint, 3]
+        centroids: mask of sampled points
     """
     device = xyz.device
     B, N, C = xyz.shape
@@ -205,7 +197,7 @@ def farthest_point_sample(xyz, npoint):
         farthest = torch.max(distance, -1)[1]
     # centroids = sampled pointcloud index, [B, npoint]
     sampled_xyz = xyz[torch.arange(B)[:, None], centroids]  # [B, npoint, 3]
-    return sampled_xyz
+    return sampled_xyz, centroids
 
 # not used
 def log_transform(x, shift=1):
@@ -335,6 +327,70 @@ def gen_rays(poses, width, height, focal, z_near, z_far, c=None):
     return torch.cat((cam_centers, cam_raydir, cam_nears, cam_fars), dim=-1)  # (B, H, W, 8)
 '''
 
+def sample_pixels(B, H, W, num_samples, device):
+    # randomly sample pixel coordinates
+    h_idxs = torch.randint(0, H, (B, num_samples), device=device) # [B, num_samples]
+    w_idxs = torch.randint(0, W, (B, num_samples), device=device) # [B, num_samples]
+    b_idxs = torch.arange(B, device=device).unsqueeze(1)
+    return b_idxs, h_idxs, w_idxs
+
+
+def sample_valid_depth_pixels(depth, num_samples):
+    # randomly sample valid pixel coordinates from a depth map
+    B, H, W = depth.shape
+    device = depth.device
+    b_idxs = torch.arange(B, device=device).unsqueeze(1)
+    
+    
+    idxs = []
+    for b in range(B):
+        valid_indices = torch.argwhere(depth[b] != 0)  # (num_valid_samples, 2)
+        num_valid_samples = valid_indices.shape[0]
+
+        if num_valid_samples < num_samples:
+            raise ValueError("Not enough non-zero depth pixels to sample from.")
+                
+        # extract randomly chosen and valid depth map indices
+        selected_indices = torch.randperm(num_valid_samples, device=device)[:num_samples] # (num_valid_samples, 2)
+        rand_valid_indices = valid_indices[selected_indices] # (num_samples, 2)
+        idxs.append(rand_valid_indices)
+
+    idxs = torch.stack(idxs, dim=0)  # (B, num_samples, 2)
+    h_idxs = idxs[..., 0]  # (B, num_samples)
+    w_idxs = idxs[..., 1]  # (B, num_samples)
+    return b_idxs, h_idxs, w_idxs
+
+
+def sample_valid_pixels(depth, normals, num_samples):
+    # randomly sample valid pixel coordinates from a depth map
+    B, H, W = depth.shape
+    device = depth.device
+
+    idxs = []
+    for b in range(B):
+        valid_depth = depth[b] != 0  # (H, W)
+        valid_normals = ~torch.isnan(normals[b]).any(dim=2)  # (H, W)                
+        valid = torch.logical_and(valid_depth, valid_normals)  # (H, W)        
+        
+        valid_idxs = torch.argwhere(valid)  # (num_valid_idxs, 2)
+        num_valid_idxs = valid_idxs.shape[0]
+        
+        if num_valid_idxs < num_samples:
+            raise ValueError("Not enough valid pixels to sample from.")
+                
+        # extract randomly chosen and valid depth map indices
+        selected_idxs = torch.randperm(num_valid_idxs, device=device)[:num_samples] # (num_samples, 2)
+        rand_valid_idxs = valid_idxs[selected_idxs] # (num_samples, 2)
+        idxs.append(rand_valid_idxs)
+
+    idxs = torch.stack(idxs, dim=0)  # (B, num_samples, 2)
+    h_idxs = idxs[..., 0]  # (B, num_samples)
+    w_idxs = idxs[..., 1]  # (B, num_samples)
+    b_idxs = torch.arange(B, device=device).unsqueeze(1)  # (B, 1)
+
+    return b_idxs, h_idxs, w_idxs
+        
+
 def sample_points_from_bounding_box(xyz, num_samples):
     """
     Calculate the bounding box of the point cloud and sample points from the volume.
@@ -354,7 +410,7 @@ def sample_points_from_bounding_box(xyz, num_samples):
     return sampled_xyz
 
 
-def sample_points_in_frustum(intrinsics, pose, num_samples, min_dist, max_dist, img_width, img_height):
+def sample_points_in_frustum(h_idxs, w_idxs, intrinsics, pose, min_dist, max_dist):
     """
     Sample points within the camera's view frustum in world coordinates for a batch of cameras.
     
@@ -368,24 +424,20 @@ def sample_points_in_frustum(intrinsics, pose, num_samples, min_dist, max_dist, 
     Returns:
         xyz_world (B, num_samples, 3): sampled points in world coordinates for each camera
     """
-    B = intrinsics.shape[0]
     device = intrinsics.device
-
-    # sample 2D points within the image rectangle for each camera
-    u = torch.rand(B, num_samples, device=device) * img_width  # x-pixel-coord
-    v = torch.rand(B, num_samples, device=device) * img_height # y-pixel-coord
+    B, num_samples = h_idxs.shape
 
     # sample depth values between min_dist and max_dist for each camera
     # pow = sqrt: sample more points in the distance (for equal distribution in frustum)
-    z = torch.pow(torch.rand(B, num_samples, device=device), 1.0/2.0) * (max_dist - min_dist) + min_dist
+    z = torch.pow(torch.rand(B, num_samples, device=device), 1.0/2.0) * (max_dist - min_dist) + min_dist    
 
     # convert 2D pixel coordinates to normalized image coordinates for each camera
-    u_norm = (u - intrinsics[:, 0, 2].unsqueeze(-1)) / intrinsics[:, 0, 0].unsqueeze(-1)  # (u - cx) / fx
-    v_norm = (v - intrinsics[:, 1, 2].unsqueeze(-1)) / intrinsics[:, 1, 1].unsqueeze(-1)  # (v - cy) / fy
+    w_norm = (w_idxs - intrinsics[:, 0, 2].unsqueeze(-1)) / intrinsics[:, 0, 0].unsqueeze(-1)  # (u - cx) / fx
+    h_norm = (h_idxs - intrinsics[:, 1, 2].unsqueeze(-1)) / intrinsics[:, 1, 1].unsqueeze(-1)  # (v - cy) / fy
 
     # compute the corresponding 3D coordinates in the camera space
-    x = u_norm * z
-    y = v_norm * z
+    x = w_norm * z
+    y = h_norm * z
 
     xyz_camera = torch.stack((x, y, z), dim=-1)  # (B, num_samples, 3)
 
@@ -398,19 +450,20 @@ def sample_points_in_frustum(intrinsics, pose, num_samples, min_dist, max_dist, 
     # convert back from homogeneous coordinates to cartesian coordinates
     xyz_world = xyz_world_hom[:, :, :3] / xyz_world_hom[:, :, 3:] # (B, num_samples, 3)
 
-    return xyz_world
+    return xyz_world, z
 
 
-def sample_points_on_rays(intrinsics, poses, depth, num_samples, N, M, delta, min_dist, sigma):
+def sample_points_on_rays(h_idxs, w_idxs, depths, intrinsics, poses, N, M, delta, min_dist, sigma):
     """
     Sample points within the camera's view frustum in world coordinates for a batch of cameras using rays.
     Implementation of iSDF: https://arxiv.org/abs/2204.02296
     
     Parameters:
+        h_idxs (B, num_samples): height indices of sampled pixels for each camera
+        w_idxs (B, num_samples): width indices of sampled pixels for each camera
+        depths (B, num_samples): depth of sampled pixels for each camera
         intrinsics (B, 3, 3): batch of camera intrinsic matrices
         poses (B, 4, 4): batch of camera poses in world coordinates (extrinsics)
-        depth (B, H, W): depth map for each camera
-        num_samples (int): number of pixel samples for each camera
         N: number of stratified samples
         M: number of samples around the surface
         delta: distance behind surface
@@ -418,21 +471,16 @@ def sample_points_on_rays(intrinsics, poses, depth, num_samples, N, M, delta, mi
         sigma: standard deviation for Gaussian samples
         
     Returns:
-        xyz_world (B, num_samples * (N + M + 1), 3): sampled points in world coordinates for each camera
+        xyz_world     (B, num_samples, (1+N+M), 3): sampled points in world coordinates for each camera
+        z_world       (B, num_samples, (1+N+M)   ): sampled depths values corresponding to every point
     """
-    B, H, W = depth.shape
+    B, num_samples = depths.shape
     device = intrinsics.device
-
-    # randomly sample pixel coordinates
-    u = torch.randint(0, W, (B, num_samples), device=device)
-    v = torch.randint(0, H, (B, num_samples), device=device)
     
     # sample depth values
     sampled_depths_list = []
     for b in range(B):
-        # TODO: prevent sampling pixels with missing depth information (depth=0)
-        D = depth[b, v[b], u[b]]  # depth at sampled pixels
-        D = D.squeeze()  # (num_samples)
+        D = depths[b]  # depth at sampled pixels
         
         # N stratified samples in range [min_dist, D + delta] for each sample
         stratified_depths = torch.empty(num_samples, N, device=device)  # (num_samples, N)
@@ -448,42 +496,154 @@ def sample_points_on_rays(intrinsics, poses, depth, num_samples, N, M, delta, mi
         surface_depth = D.unsqueeze(-1)  # (num_samples, 1)
         
         # combine samples N+M+1
-        sampled_depths = torch.cat((stratified_depths, gaussian_depths, surface_depth), dim=1)  # (num_samples, N+M+1)
+        sampled_depths = torch.cat((surface_depth, stratified_depths, gaussian_depths), dim=1)  # (num_samples, 1+N+M)
         sampled_depths_list.append(sampled_depths)
 
     # stack the results from all cameras/batches
-    z = torch.stack(sampled_depths_list)  # (B, num_samples, N+M+1)
+    z_mat = torch.stack(sampled_depths_list)  # (B, num_samples, N+M+1)
 
     # convert 2D pixel coordinates to normalized image coordinates for each camera
-    u_norm = (u - intrinsics[:, 0, 2].unsqueeze(-1)) / intrinsics[:, 0, 0].unsqueeze(-1)  # (u - cx) / fx
-    v_norm = (v - intrinsics[:, 1, 2].unsqueeze(-1)) / intrinsics[:, 1, 1].unsqueeze(-1)  # (v - cy) / fy
+    w_norm = (w_idxs - intrinsics[:, 0, 2].unsqueeze(-1)) / intrinsics[:, 0, 0].unsqueeze(-1)  # (u - cx) / fx
+    h_norm = (h_idxs - intrinsics[:, 1, 2].unsqueeze(-1)) / intrinsics[:, 1, 1].unsqueeze(-1)  # (v - cy) / fy
 
     # repeat 2nd dimension (all ray points correspond to same (u,v)-pixel)
-    u_repeated = u_norm.unsqueeze(-1).repeat(1, 1, z.shape[2])  # (B, num_samples, N+M+1)
-    v_repeated = v_norm.unsqueeze(-1).repeat(1, 1, z.shape[2])  # (B, num_samples, N+M+1)
+    w_repeated = w_norm.unsqueeze(-1).repeat(1, 1, z_mat.shape[2])  # (B, num_samples, 1+N+M)
+    h_repeated = h_norm.unsqueeze(-1).repeat(1, 1, z_mat.shape[2])  # (B, num_samples, 1+N+M)
 
     # compute the corresponding 3D coordinates in the camera space
-    x = u_repeated * z
-    y = v_repeated * z
+    x_mat = w_repeated * z_mat
+    y_mat = h_repeated * z_mat
 
-    # (B, num_samples, N+M+1) -> (B, num_samples*N+M+1)
-    n_points = num_samples * (N + M + 1)
-    x = x.view(B, n_points)
-    y = y.view(B, n_points)
-    z = z.view(B, n_points)
+    # (B, num_samples, N+M+1) -> (B, num_samples*(1+N+M))
+    num_points = num_samples * (1+N+M)
+    x = x_mat.view(B, num_points)
+    y = y_mat.view(B, num_points)
+    z = z_mat.view(B, num_points)
 
-    xyz_camera = torch.stack((x, y, z), dim=-1)  # (B, n_points, 3)
+    xyz_camera = torch.stack((x, y, z), dim=-1)  # (B, num_points, 3)
 
     # convert points to homogeneous coordinates
-    xyz_camera_hom = torch.cat((xyz_camera, torch.ones(B, n_points, 1, device=device)), dim=-1)  # (B, n_points, 4)
+    xyz_camera_hom = torch.cat((xyz_camera, torch.ones(B, num_points, 1, device=device)), dim=-1)  # (B, num_points, 4)
 
     # transform from camera to world coordinates
-    xyz_world_hom = torch.bmm(poses, xyz_camera_hom.permute(0, 2, 1)).permute(0, 2, 1)  # (B, n_points, 4)
+    xyz_world_hom = torch.bmm(poses, xyz_camera_hom.permute(0, 2, 1)).permute(0, 2, 1)  # (B, num_points, 4)
 
     # convert back to cartesian coordinates
-    xyz_world = xyz_world_hom[:, :, :3] / xyz_world_hom[:, :, 3:] # (B, n_points, 3)
+    xyz_world = xyz_world_hom[:, :, :3] / xyz_world_hom[:, :, 3:] # (B, num_points, 3)
 
-    return xyz_world
+    # extract samples at surface
+    xyz_world_reshaped = xyz_world.reshape(B, num_samples, -1, 3)
+    #surface_world = xyz_world_reshaped[:, :, 0:1, :]
+    #surface_world = surface_world.squeeze(2)  # (B, num_samples, 3)
+    return xyz_world_reshaped, z_mat
+
+
+def bounds_pc(pc, z_vals, depth_sample, do_grad=True):
+    """
+    Parameters:
+        pc (n_rays, 1+N+M, 3): point cloud
+        z_val (n_rays, 1+N+M): depth values
+        depth_sample (n_rays): depth value samples at sampled rays
+    Returns:
+        bounds (n_rays, 1+N+M): Signed distances from points to closest surface points
+        grad (n_rays, N+M, 3): Gradient vectors for points
+    """
+
+    # from loss.py of iSDF
+    with torch.set_grad_enabled(False):
+        surf_pc = pc[:, 0]
+        diff = pc[:, :, None] - surf_pc
+        dists = diff.norm(dim=-1)
+        dists, closest_ixs = dists.min(axis=-1)
+        behind_surf = z_vals > depth_sample[:, None]
+        dists[behind_surf] *= -1
+        bounds = dists
+
+        grad = None
+        if do_grad:
+            ix1 = torch.arange(diff.shape[0])[:, None]
+            ix1 = ix1.repeat(1, diff.shape[1])
+            ix2 = torch.arange(diff.shape[1])[None, :]
+            ix2 = ix2.repeat(diff.shape[0], 1)
+            grad = diff[ix1, ix2, closest_ixs]
+            grad = grad[:, 1:]
+            grad = grad / grad.norm(dim=-1)[..., None]
+
+            # flip grad vectors behind the surf
+            grad[behind_surf[:, 1:]] *= -1
+
+        #visualize_surface_and_connections(pc, surf_pc, closest_ixs)
+        
+    return bounds, grad
+
+def bounds_pc_batch(pc, z_vals, depth_sample, do_grad=True):
+    """
+    Adapted from loss.py of iSDF to work on batches.
+    Parameters:
+        pc (B, n_rays, 1+N+M), 3): point cloud
+        z_val (B, n_rays, 1+N+M): depth values
+        depth_sample (B, n_rays): depth value samples at sampled rays
+    Returns:
+        bounds (B, n_rays, 1+N+M   ): Signed distances from points to closest surface points
+        grad   (B, n_rays,   N+M, 3): Gradient vectors for points
+    """
+    with torch.set_grad_enabled(False):
+        B = pc.shape[0]
+        surf_pc = pc[:, :, 0]  # (B, n_rays, 3) surface points
+
+        # calculate differences
+        diff = [pc[b, :, :, None] - surf_pc[b] for b in range(B)]      
+        diff = torch.stack(diff, dim=0)  # (B, n_rays, (1+N+M), n_rays, 3)
+
+        # calculate distances
+        dists = diff.norm(dim=-1)  # (B, n_rays, (1+N+M), n_rays)
+        min_dists, closest_ixs = dists.min(dim=-1)  # (B, n_rays, (1+N+M)), (B, n_rays, (1+N+M))
+
+        # identify points behind the surface
+        behind_surf = z_vals > depth_sample[:, :, None]  # (B, n_rays, (1+N+M))
+
+        # modify distances for points behind the surface
+        min_dists[behind_surf] *= -1
+        
+        bounds = min_dists  # (B, n_rays, (1+N+M))
+
+        grad = None
+        if do_grad:
+            ix0 = torch.arange(diff.shape[0])[:, None, None] # (B, 1, 1)
+            ix0 = ix0.repeat(1, diff.shape[1], diff.shape[2]) # (B, n_rays, (1+N+M))
+            ix1 = torch.arange(diff.shape[1])[None, :, None] # (1, n_rays, 1)
+            ix1 = ix1.repeat(diff.shape[0], 1, diff.shape[2]) # (B, n_rays, (1+N+M))            
+            ix2 = torch.arange(diff.shape[2])[None, None, :] # (1, 1, (1+N+M))
+            ix2 = ix2.repeat(diff.shape[0], diff.shape[1], 1) # (B, n_rays, (1+N+M))
+            
+            # select differences for closest points
+            grad = diff[ix0, ix1, ix2, closest_ixs] # (B, n_rays, (1+N+M), 3)
+            
+            # exclude gradients for the surface point
+            grad = grad[:, :, 1:] # (B, n_rays, (N+M), 3)
+
+            # normalize gradient
+            grad = grad / grad.norm(dim=-1, keepdim=True)  # (B, n_rays, (N+M), 3)
+            
+            # flip gradients for points behind the surface
+            grad[behind_surf[:, :, 1:]] *= -1
+
+    #visualize_surface_and_connections(pc[0], surf_pc[0], closest_ixs[0])
+    return bounds, grad
+
+def calculate_grad(inputs, outputs):
+
+    # compute the gradient of the output tsdfs with respect to the input points
+    grad_outputs = torch.ones_like(outputs, requires_grad=False, device=outputs.device)
+    gradient = torch.autograd.grad(
+        outputs=outputs,
+        inputs=inputs,
+        grad_outputs=grad_outputs,
+        create_graph=True,
+        retain_graph=True,
+        only_inputs=True
+    )[0]  # (B, N, 3)
+    return gradient
 
 
 # for renderer
@@ -1009,7 +1169,7 @@ def grid_sample_2d(image, optical):
                sw_val.view(N, C, H, W) * sw.view(N, 1, H, W) +
                se_val.view(N, C, H, W) * se.view(N, 1, H, W))
 
-    return out_val.squeeze().unsqueeze(0)
+    return out_val
 
 
 def grid_sample_3d(image, optical):
@@ -1130,3 +1290,61 @@ def grid_sample_3d(image, optical):
 
     return out_val
 
+
+# adapted from https://github.com/wkentaro/morefusion/blob/main/morefusion/geometry/estimate_pointcloud_normals.py
+def estimate_pointcloud_normals(points):
+    # These lookups denote yx offsets from the anchor point for 8 surrounding
+    # directions from the anchor A depicted below.
+    #  -----------
+    # | 7 | 6 | 5 |
+    #  -----------
+    # | 0 | A | 4 |
+    #  -----------
+    # | 1 | 2 | 3 |
+    #  -----------
+    assert points.shape[2] == 3
+
+    d = 2
+    H, W = points.shape[:2]
+    points = torch.nn.functional.pad(
+        points,
+        pad=(0, 0, d, d, d, d),
+        mode="constant",
+        value=float('nan'),
+    )
+
+    lookups = torch.tensor(
+        [(-d, 0), (-d, d), (0, d), (d, d), (d, 0), (d, -d), (0, -d), (-d, -d)]
+    ).to(points.device)
+
+    j, i = torch.meshgrid(torch.arange(W), torch.arange(H))
+    i = i.transpose(0, 1).to(points.device)
+    j = j.transpose(0, 1).to(points.device)
+    k = torch.arange(8).to(points.device)
+
+    i1 = i + d
+    j1 = j + d
+    points1 = points[i1, j1]
+
+    lookup = lookups[k]
+    i2 = i1[None, :, :] + lookup[:, 0, None, None]
+    j2 = j1[None, :, :] + lookup[:, 1, None, None]
+    points2 = points[i2, j2]
+
+    lookup = lookups[(k + 2) % 8]
+    i3 = i1[None, :, :] + lookup[:, 0, None, None]
+    j3 = j1[None, :, :] + lookup[:, 1, None, None]
+    points3 = points[i3, j3]
+    
+    diff = torch.linalg.norm(points2 - points1, dim=3) + torch.linalg.norm(
+        points3 - points1, dim=3
+    )
+    diff[torch.isnan(diff)] = float('inf')
+    indices = torch.argmin(diff, dim=0)
+
+    normals = torch.cross(
+        points2[indices, i, j] - points1[i, j],
+        points3[indices, i, j] - points1[i, j],
+    )
+    normals /= torch.linalg.norm(normals, dim=2, keepdims=True)
+    return normals

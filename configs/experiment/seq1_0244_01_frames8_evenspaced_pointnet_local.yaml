@@ -82,7 +82,11 @@ model:
     eikonal:
       weight: 0.01
       apply_distance: 0.1
-      
+
+    use_gradient: False
+    gradient:
+      weight: 0.02
+
     use_feature: False
     feature:
       weight: 0.1

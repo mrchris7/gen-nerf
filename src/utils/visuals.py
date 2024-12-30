@@ -301,3 +301,112 @@ def render_depth_image_o3d(renderer, intrinsics, pose, width, height, distance_o
     normalized_depth = ((depth_image - depth_min) / (depth_max - depth_min) * 255).astype(np.uint8)
     
     return normalized_depth
+
+
+def visualize_surface_and_connections(pc, surf_pc, closest_ixs):
+    
+    ''' original visualization:
+    # vis gradient vector
+    surf_pc_tm = trimesh.PointCloud(
+        surf_pc.reshape(-1, 3).cpu(), colors=[255, 0, 0])
+    pc_tm = trimesh.PointCloud(pc[:, 1:].reshape(-1, 3).cpu())
+    closest_surf_pts = surf_pc[closest_ixs].reshape(-1, 3)
+    lines = torch.cat((
+        closest_surf_pts[:, None, :],
+        pc.reshape(-1, 3)[:, None, :]), dim=1)
+    paths = trimesh.load_path(lines.cpu())
+    trimesh.Scene([surf_pc_tm, pc_tm, paths]).show()
+    '''
+    
+    # convert surface points and full point cloud to numpy
+    surf_pc_np = surf_pc.reshape(-1, 3).cpu().numpy()
+    pc_np = pc.reshape(-1, 3).cpu().numpy()
+
+    # create point clouds
+    surf_pc_o3d = o3d.geometry.PointCloud()
+    surf_pc_o3d.points = o3d.utility.Vector3dVector(surf_pc_np)
+    surf_pc_o3d.paint_uniform_color([1, 0, 0])  # red
+
+    pc_o3d = o3d.geometry.PointCloud()
+    pc_o3d.points = o3d.utility.Vector3dVector(pc_np)
+    pc_o3d.paint_uniform_color([0, 0, 1])  # blue
+
+    # generate line data between points and their closest surface points
+    closest_surf_pts_np = surf_pc[closest_ixs.flatten()].reshape(-1, 3).cpu().numpy()
+    lines = [[i, i + len(pc_np)] for i in range(len(pc_np))]
+
+    # combine all points
+    line_points = np.vstack((pc_np, closest_surf_pts_np))
+    line_set = o3d.geometry.LineSet()
+    line_set.points = o3d.utility.Vector3dVector(line_points)
+    line_set.lines = o3d.utility.Vector2iVector(lines)
+    line_set.paint_uniform_color([0, 1, 0])  # green
+
+    # increase point size for the surface points by creating spheres
+    spheres = []
+    for point in surf_pc_np:
+        sphere = o3d.geometry.TriangleMesh.create_sphere(radius=0.02)
+        sphere.translate(point)
+        sphere.paint_uniform_color([1, 0, 0])  # red
+        spheres.append(sphere)
+
+    # Visualize
+    o3d.visualization.draw_geometries([pc_o3d, line_set] + spheres)
+
+
+def show_normals(points_tensor, normals_tensor, title="Normals Visualization"):
+
+    vis = o3d.visualization.Visualizer()
+    vis.create_window(window_name=title, width=1720, height=980)
+
+    b = 0
+    points_np = points_tensor.clone()[b].detach().cpu().numpy()
+    normals_np = normals_tensor.clone()[b].detach().cpu().numpy()
+    print("points", points_np.shape)
+    print("normals", normals_np.shape)
+    print("normals:", normals_np[:10])
+
+    # flip normals
+    normals_np = -normals_np
+
+    pc = o3d.geometry.PointCloud()
+    pc.points = o3d.utility.Vector3dVector(points_np)
+
+    points_color = np.ones_like(points_np)
+    points_color[:, 0] = 0  # r
+    points_color[:, 1] = 0  # g
+    points_color[:, 2] = 1  # b
+    pc.colors = o3d.utility.Vector3dVector(points_color)
+
+    vis.add_geometry(pc)
+
+    # create normals as arrows
+    # create arrow geometry for each normal
+    arrow_points = points_np
+
+    # normalize
+    norms = np.linalg.norm(normals_np, axis=1, keepdims=True)
+    norms[norms == 0] = 1.0
+    dirs = normals_np / norms
+
+    arrow_directions = dirs  # direction of the arrows is the normal
+
+    # each arrow will be a line starting from the point and extending along the normal
+    arrow_length = 0.05
+    arrow_end_points = arrow_points + arrow_directions * arrow_length
+
+    lines = []
+    for i in range(len(arrow_points)):
+        lines.append([i, len(arrow_points) + i])   # line from the point to the same point, extended by the normal
+
+    arrow_lines = o3d.geometry.LineSet()
+    arrow_lines.points = o3d.utility.Vector3dVector(np.vstack((arrow_points, arrow_end_points)))
+    arrow_lines.lines = o3d.utility.Vector2iVector(lines)
+
+    # color the arrows
+    arrow_colors = np.ones((len(lines), 3)) * [0, 1, 0]  # green
+    arrow_lines.colors = o3d.utility.Vector3dVector(arrow_colors)
+
+    vis.add_geometry(arrow_lines)
+    vis.run()
+    vis.destroy_window()

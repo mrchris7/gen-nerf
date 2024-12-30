@@ -82,6 +82,10 @@ model:
       weight: 0.25
       apply_distance: 0.1
 
+    use_gradient: True
+    gradient:
+      weight: 0.02
+
     use_feature: False
     feature:
       weight: 0.1
