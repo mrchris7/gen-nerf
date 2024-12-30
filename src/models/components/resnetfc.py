@@ -74,6 +74,8 @@ class ResnetFC(nn.Module):
         combine_layer=1000,
         combine_type="average",
         use_spade=False,
+        use_layer_norm=False,
+        alpha=1.0,
     ):
         """
         :param d_in input size
@@ -102,8 +104,12 @@ class ResnetFC(nn.Module):
         self.combine_layer = combine_layer
         self.combine_type = combine_type
         self.use_spade = use_spade
+        self.use_layer_norm = use_layer_norm
+        self.alpha = alpha
 
         self.blocks = nn.ModuleList([ResnetBlockFC(d_hidden, beta=beta) for i in range(n_blocks)])
+        if self.use_layer_norm:
+            self.layer_norms = nn.ModuleList([nn.LayerNorm(d_hidden) for _ in range(n_blocks)])
 
         if d_latent != 0:
             n_lin_z = min(combine_layer, n_blocks)
@@ -122,6 +128,7 @@ class ResnetFC(nn.Module):
             self.activation = nn.Softplus(beta=beta)
         else:
             self.activation = nn.ReLU()
+        self.alpha = nn.Parameter(torch.tensor(self.alpha))  # i.e 0.1 -> Gradual latent injection
 
     def forward(self, zx, combine_inner_dims=(1,), combine_index=None, dim_size=None, ret_last_feat=False):
         """
@@ -167,11 +174,13 @@ class ResnetFC(nn.Module):
                     tz = self.lin_z[blkid](z)
                     if self.use_spade:
                         sz = self.scale_z[blkid](z)
-                        x = sz * x + tz
+                        x = sz * x + self.alpha * tz
                     else:
-                        x = x + tz
+                        x = x + self.alpha * tz
 
                 x = self.blocks[blkid](x)
+                if self.use_layer_norm:
+                    x = self.layer_norms[blkid](x)
             out = self.lin_out(self.activation(x))
             if not ret_last_feat:
                 return out
@@ -189,5 +198,7 @@ class ResnetFC(nn.Module):
             beta=cfg.beta,
             combine_layer=cfg.combine_layer,
             combine_type=cfg.combine_type,
-            use_spade=cfg.use_spade
+            use_spade=cfg.use_spade,
+            use_layer_norm=cfg.use_layer_norm,
+            alpha=cfg.alpha
         )

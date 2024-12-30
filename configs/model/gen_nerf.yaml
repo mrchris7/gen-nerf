@@ -80,6 +80,8 @@ mlp:
   combine_type: average
   beta: 0.0
   use_spade: False
+  use_layer_norm: False
+  alpha: 1.0  # latent gradual injection
 
 use_code: True # positional encoding
 code:

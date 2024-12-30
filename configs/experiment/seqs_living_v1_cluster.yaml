@@ -56,6 +56,8 @@ model:
     beta: 0.0
     d_hidden: 256
     combine_layer: 1000
+    use_layer_norm: True
+    alpha: 1.0
   
   use_code: True
   code:
