@@ -37,6 +37,7 @@ class ResnetBlockFC(nn.Module):
         nn.init.kaiming_normal_(self.fc_0.weight, a=0, mode="fan_in")
         nn.init.constant_(self.fc_1.bias, 0.0)
         nn.init.zeros_(self.fc_1.weight)
+        #nn.init.kaiming_normal_(self.fc_1.weight, a=0, mode="fan_in")
 
         if beta > 0:
             self.activation = nn.Softplus(beta=beta)

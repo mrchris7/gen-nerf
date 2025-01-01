@@ -15,6 +15,7 @@
 #  Originating Author: Zak Murez (zak.murez.com)
 
 import torch
+import torch.nn.init as init
 from torch import nn
 from torch.nn import functional as F
 from src.models.utils import log_transform
@@ -25,6 +26,12 @@ class TSDFHeadSimple(nn.Module):
         super(TSDFHeadSimple, self).__init__()
 
         self.fc = nn.Linear(input_dim, 1)
+        self._initialize_weights()
+
+    def _initialize_weights(self):
+        init.xavier_uniform_(self.fc.weight, gain=init.calculate_gain('tanh'))
+        if self.fc.bias is not None:
+            init.zeros_(self.fc.bias)
 
     def forward(self, x):
         """

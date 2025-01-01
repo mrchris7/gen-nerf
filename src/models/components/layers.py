@@ -36,6 +36,7 @@ class ResnetBlockFC(nn.Module):
             self.shortcut = nn.Linear(size_in, size_out, bias=False)
         # Initialization
         nn.init.zeros_(self.fc_1.weight)
+        #nn.init.kaiming_normal_(self.fc_1.weight, a=0, mode="fan_in")
 
     def forward(self, x):
         net = self.fc_0(self.actvn(x))
