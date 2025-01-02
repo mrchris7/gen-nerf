@@ -102,7 +102,8 @@ def train(cfg: DictConfig) -> Tuple[Dict[str, Any], Dict[str, Any]]:
         # Instantiate test trainer with 1 device
         test_cfg = cfg.trainer.copy()
         test_cfg.devices = 1  # ensure each sample/batch gets evaluated exactly once
-        test_cfg.strategy = 'auto'
+        if 'strategy' in test_cfg:
+            test_cfg.strategy = 'auto'
         trainer_test: Trainer = hydra.utils.instantiate(test_cfg, callbacks=callbacks, logger=logger)
 
         trainer_test.test(model=model, datamodule=datamodule, ckpt_path=ckpt_path)

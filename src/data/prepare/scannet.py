@@ -126,9 +126,9 @@ def prepare_scannet_scene(scene, path, path_meta, verbose=2):
             continue
 
         frame = {'file_name_image': os.path.join(path_meta, folder, scene, 'color', '%d.jpg'%frame_id),
-                 'file_name_image_prep': os.path.join(path, folder, scene, 'color', '%d.jpg'%frame_id),
+                 'file_name_image_temp': os.path.join(path, folder, scene, 'color', '%d.jpg'%frame_id),
                  'file_name_depth': os.path.join(path_meta, folder, scene, 'depth', '%d.png'%frame_id),
-                 'file_name_depth_prep': os.path.join(path, folder, scene, 'depth', '%d.png'%frame_id),
+                 'file_name_depth_temp': os.path.join(path, folder, scene, 'depth', '%d.png'%frame_id),
                  #'file_name_instance': 
                  #    os.path.join(path_meta, folder, scene, 'instance-filt',
                  #        '%d.png'%frame_id) if has_semantic_labels else '',

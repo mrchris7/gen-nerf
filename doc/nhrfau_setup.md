@@ -69,7 +69,7 @@ Downloading takes a while and can sometimes lead to a cancellation of the proces
 Then add the splits from the repository to the ```PATH_RAW``` directory:
 ```
 cd gen-nerf
-scp -r splits/ $WORK/data/scannet_raw
+scp -r splits/* $WORK/data/scannet_raw
 ```
 
 ### Prepare Data
@@ -130,7 +130,7 @@ PATH_DATA
 
 ## Quick Demo
 
-If you just want to run a demo and do not want to install the whole dataset, we provide a prepared data for training on one scene.
+If you just want to run a demo and do not want to install the whole dataset, we provide a prepared data structure for training on one scene.
 
 ### Download Prepared Data
 Download ```scannet_demo.tar``` [here](https://drive.google.com/file/d/1HlkqURV0shaQg06PfP0qmaWoM-A4dvcw/view?usp=drive_link) and unpack it in the data directory ```DATA_DIR``` (i.e. ```/home/atuin/gxxxxx/gxxxxx00/data```):
@@ -139,13 +139,13 @@ mkdir DATA_DIR
 tar -xf scannet_demo.tar -C DATA_DIR
 ```
 
-Create a info.json that contains the absolute path to your data directory ```DATA_DIR```:
+Create an info.json that contains the absolute path to your data directory ```DATA_DIR```:
 ```
 cd DATA_DIR/scannet/scans/scene0244_01/
 sed 's|XXX|DATA_DIR|g' info_template.json > info.json
 ```
 
-Adjust the paths in the config file ```configs/paths/cluster.yaml``` (set ```data_dir=DATA_DIR/scannet```).
+Adjust the paths in the config file ```configs/paths/cluster.yaml``` (set ```data_dir: DATA_DIR/scannet```).
 
 
 ### Run Experiment
@@ -167,4 +167,4 @@ The result of the run will be stored in the ```log_dir``` specified in the paths
 
 ### Visualize Result
 First, you need to transfer the results of the desired run in ```[log_dir]/train/runs``` to your local machine.
-You can vizualize the result locally using the script ```scripts/local/visualize_all.py```.
+You can visualize the result locally using the script ```scripts/local/visualize_all.py```.

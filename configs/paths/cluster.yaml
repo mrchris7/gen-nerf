@@ -1,6 +1,6 @@
 defaults:
   - default
 
-data_dir: /home/atuin/g101ea/g101ea13/data/scannet
-log_dir: /home/atuin/g101ea/g101ea13/logs
-debug_dir: /home/atuin/g101ea/g101ea13/debug
+data_dir: ${oc.env:TMPDIR}/data/scannet
+log_dir: ${oc.env:WORK}/logs
+debug_dir: ${oc.env:WORK}/debug

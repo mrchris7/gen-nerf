@@ -3,7 +3,7 @@ data_dir: ${paths.data_dir}
 datasets_train: ['scannet_train.txt']
 datasets_val: ['scannet_val.txt']
 datasets_test: ['scannet_test.txt']
-from_archive: True
+from_archive: False  # whether data needs to be loaded from archive
 num_workers_train: 15
 num_workers_val: 15
 num_workers_test: 15

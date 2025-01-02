@@ -88,7 +88,7 @@ def fuse_scene(path_meta, scene, voxel_size, trunc_ratio=3, max_depth=3,
                                     transforms.IntrinsicsPoseToProjection(),
                                   ])
     frame_types=['depth', 'semseg'] if fuse_semseg else ['depth']
-    dataset = SceneDataset(info_file, transform, frame_types, from_archive=False)
+    dataset = SceneDataset(info_file, transform, frame_types, from_archive=False, temp_access=True)
     dataloader = torch.utils.data.DataLoader(dataset, batch_size=None,
                                              batch_sampler=None, num_workers=4)
 
@@ -238,10 +238,10 @@ def clean_info(scene, path_meta):
     # remove prep-paths 
     # (temporaty required during data-preparation pointing to node-local storage)
     for frame in data['frames']:
-        if 'file_name_image_prep' in frame:
-            del frame['file_name_image_prep']
-        if 'file_name_depth_prep' in frame:
-            del frame['file_name_depth_prep']
+        if 'file_name_image_temp' in frame:
+            del frame['file_name_image_temp']
+        if 'file_name_depth_temp' in frame:
+            del frame['file_name_depth_temp']
 
     json.dump(data, open(info_file, 'w'))
 
@@ -284,7 +284,7 @@ def prepare_scannet(path, path_meta, i=0, n=1, test_only=False, max_depth=3, ski
     for scene in scenes:
         prepare_scannet_scene(scene, path, path_meta)
         for voxel_size in [4,8,16]:
-            fuse_scene(path_meta, scene, voxel_size, device=i%8, max_depth=max_depth, skip_existing=skip_existing, verbose=verbose)
+            fuse_scene(path_meta, scene, voxel_size, device=i%4, max_depth=max_depth, skip_existing=skip_existing, verbose=verbose)
             #if scene.split('/')[0]=='scans':
             #    label_scene(path_meta, scene, voxel_size)
     

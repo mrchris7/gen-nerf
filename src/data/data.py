@@ -43,7 +43,7 @@ def load_info_json(json_file):
     return info
     
 
-def map_frame(frame, frame_types=[], from_archive=True):
+def map_frame(frame, frame_types=[], from_archive=True, temp_access=False):
     """ Load images and metadata for a single frame.
 
     Given an info json we use this to load the images, etc for a single frame
@@ -64,9 +64,14 @@ def map_frame(frame, frame_types=[], from_archive=True):
         if 'depth' in frame_types:
             depth = open_from_archive(frame['file_name_depth'])
     else:
-        data['image'] = Image.open(frame['file_name_image_prep'])
-        if 'depth' in frame_types:
-            depth = Image.open(frame['file_name_depth_prep'])
+        if temp_access:
+            data['image'] = Image.open(frame['file_name_image_temp'])
+            if 'depth' in frame_types:
+                depth = Image.open(frame['file_name_depth_temp'])
+        else:
+            data['image'] = Image.open(frame['file_name_image'])
+            if 'depth' in frame_types:
+                depth = Image.open(frame['file_name_depth'])
             
     depth = np.array(depth, dtype=np.float32) / DEPTH_SHIFT
     data['depth'] = Image.fromarray(depth)
@@ -76,7 +81,7 @@ def map_frame(frame, frame_types=[], from_archive=True):
     return data
 
 
-def map_frames(frames, frame_ids, frame_types=[], from_archive=True):
+def map_frames(frames, frame_ids, frame_types=[], from_archive=True, temp_access=False):
     """ Load images and metadata for frame_ids of frames.
 
     Given an info json we use this to load the images, etc for a all frames
@@ -105,11 +110,18 @@ def map_frames(frames, frame_ids, frame_types=[], from_archive=True):
     else:
         # images are stored unpacked (not used here)
         for data in frames_data:
-            data['image'] = Image.open(data['file_name_image_prep'])
-            if 'depth' in frame_types:
-                depth = Image.open(data['file_name_depth_prep'])
-                depth = np.array(depth, dtype=np.float32) / DEPTH_SHIFT
-                data['depth'] = Image.fromarray(depth)
+            if temp_access:
+                data['image'] = Image.open(data['file_name_image_temp'])
+                if 'depth' in frame_types:
+                    depth = Image.open(data['file_name_depth_temp'])
+                    depth = np.array(depth, dtype=np.float32) / DEPTH_SHIFT
+                    data['depth'] = Image.fromarray(depth)
+            else:
+                data['image'] = Image.open(data['file_name_image'])
+                if 'depth' in frame_types:
+                    depth = Image.open(data['file_name_depth'])
+                    depth = np.array(depth, dtype=np.float32) / DEPTH_SHIFT
+                    data['depth'] = Image.fromarray(depth)
     
     for data in frames_data:
         data['intrinsics'] = np.array(data['intrinsics'], dtype=np.float32)
@@ -199,7 +211,7 @@ class SceneDataset(torch.utils.data.Dataset):
     """Pytorch Dataset for a single scene. getitem loads individual frames"""
 
     def __init__(self, info_file, transform=None, frame_types=[],
-                 voxel_types=[], voxel_sizes=[], num_frames=-1, from_archive=True):
+                 voxel_types=[], voxel_sizes=[], num_frames=-1, from_archive=True, temp_access=False):
         """
         Args:
             info_file: path to json file (format described in datasets/README)
@@ -209,6 +221,7 @@ class SceneDataset(torch.utils.data.Dataset):
             voxel_sizes: list of voxel sizes to load
             num_frames: number of evenly spaced frames to use (-1 for all)
             from_archive: whether data is stored in an archive
+            temp_access: whether data is accessed from a temporary storage (only for preparing dataset)
         """
 
         self.info = load_info_json(info_file)
@@ -217,6 +230,7 @@ class SceneDataset(torch.utils.data.Dataset):
         self.voxel_types = voxel_types
         self.voxel_sizes = voxel_sizes
         self.from_archive = from_archive
+        self.temp_access = temp_access
 
         # select evenly spaced subset of frames
         if num_frames>-1:
@@ -234,7 +248,7 @@ class SceneDataset(torch.utils.data.Dataset):
             dict of meta data and images for a single frame
         """
 
-        frame = map_frame(self.info['frames'][i], self.frame_types, self.from_archive)
+        frame = map_frame(self.info['frames'][i], self.frame_types, self.from_archive, self.temp_access)
 
         # put data in common format so we can apply transforms
         data = {'dataset': self.info['dataset'],

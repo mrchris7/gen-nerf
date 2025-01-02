@@ -65,32 +65,32 @@ model:
     freq_factor: 0.5
     include_input: True
 
-loss:
-  use_tsdf: True
-  tsdf:
-    weight: 1.0
-    transform: 'smooth_log'
-    shift: 15.0
-    smoothness: 10.0
+  loss:
+    use_tsdf: True
+    tsdf:
+      weight: 1.0
+      transform: 'smooth_log'
+      shift: 15.0
+      smoothness: 10.0
 
-  use_isdf: False
-  isdf:
-    weight: 1.0
-    free_space_factor: 5
-    trunc_weight: 5
+    use_isdf: False
+    isdf:
+      weight: 1.0
+      free_space_factor: 5
+      trunc_weight: 5
 
-  use_eikonal: True
-  eikonal:
-    weight: 0.25
-    apply_distance: 0.1
+    use_eikonal: True
+    eikonal:
+      weight: 0.25
+      apply_distance: 0.1
 
-  use_gradient: True
+    use_gradient: True
     gradient:
       weight: 0.02
-    
-  use_feature: False
-  feature:
-    weight: 0.1
+      
+    use_feature: False
+    feature:
+      weight: 0.1
 
 data:
   datasets_train: ['scannet_living_train.txt']

@@ -118,8 +118,8 @@ def main():
         all_scenes += sorted([os.path.join('scans_test', scene)
                         for scene in os.listdir(os.path.join(path_in, 'scans_test'))])
         scenes += all_scenes[:args.num_scenes]
-    
-    if not args.scenes and not args.scenes_file and not args.num_scenes:
+
+    if not args.scenes and not args.scenes_file and args.num_scenes <= 0:
         if not args.test_only:
             print(f"Reading all scenes")
             scenes += sorted([os.path.join('scans', scene) 
@@ -142,7 +142,7 @@ def main():
 
     # scenes contain: "scans/scene0000_00" or "scans_test/scene0000_00"
     pbar = tqdm.tqdm()
-    pool = multiprocessing.Pool(processes=8)
+    pool = multiprocessing.Pool(processes=16)
     for scene in scenes:
         scene_id = scene.split('/')[1]
         filename = os.path.join(path_in, scene, scene_id + '.sens')

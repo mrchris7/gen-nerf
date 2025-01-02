@@ -75,7 +75,7 @@ def build_scene(scene, path_target, path_raw, path_archive, extract_archives):
     # scene_id: scene0000_00
 
     path_scene_target = os.path.join(path_target, scene)
-    os.makedirs(path_scene_target)
+    os.makedirs(path_scene_target, exist_ok=True)
 
     # copy raw files from path_raw to path_target
     path_scene_raw = os.path.join(path_raw, scene)
@@ -98,28 +98,53 @@ def build_scene(scene, path_target, path_raw, path_archive, extract_archives):
                 child_name = os.listdir(extracted_dir)[0]
                 extracted_dir_child = os.path.join(temp_dir, child_name)
                 shutil.move(extracted_dir_child, path_scene_target)
-                shutil.rmtree(extracted_dir)
     
     path_scene_tar = os.path.join(path_archive, scene_f, scene_id)
     if os.path.exists(path_scene_tar):
+        
+        #######################################
+        # When building for training:
+        #######################################
+        
+        # copy generated files from path_archive to path_target
+        for file in ['tsdf_04.npz', 'tsdf_08.npz', 'tsdf_16.npz',
+                     'mesh_04.ply', 'mesh_08.ply', 'mesh_16.ply']:
+            path_gen_file = os.path.join(path_scene_tar, file)
+            if os.path.exists(path_gen_file):
+                shutil.copy(path_gen_file, path_scene_target)
+
+        # if info file exists copy it and adjust paths
+        path_info = os.path.join(path_scene_tar, 'info.json')
+        if os.path.exists(path_info):
+            
+            # change paths inside info file
+            with open(path_info, 'r') as file:
+                data = file.read()
+            data = data.replace(path_archive, path_target)
+            path_info_new = os.path.join(path_scene_target, 'info.json')
+            with open(path_info_new, 'w') as file:
+                file.write(data)
+        #######################################
+        
         # copy raw files from path_archive to path_target
         for folder in ['intrinsics']:
             dir = os.path.join(path_scene_target, folder)
-            os.makedirs(dir)
+            os.makedirs(dir, exist_ok=True)
             for file in ['extrinsic_color.txt', 'extrinsic_depth.txt', 'intrinsic_color.txt', 'intrinsic_depth.txt']:
                 shutil.copy(os.path.join(path_scene_tar, folder, file), dir)
-        
+                
         # extract tars from path_archive to path_target
         for folder in ['color', 'depth', 'poses']:
             tar_file = os.path.join(path_scene_tar, folder, f'{folder}.tar')
 
             dir = os.path.join(path_scene_target, folder)
-            os.makedirs(dir)
+            os.makedirs(dir, exist_ok=True)
             if extract_archives:
                 with tarfile.open(tar_file, 'r') as tar:
                     tar.extractall(path=dir, filter='data')
             else:
                 shutil.copy(tar_file, dir)
+        
     else:
         print(f"Could not build frames of scene {scene} (the .sens file has not yet been read and extracted)")
         return
@@ -148,10 +173,25 @@ def main():
     shutil.copy(os.path.join(path_raw, 'scannetv2_living_test.txt'), path_target)
     shutil.copy(os.path.join(path_raw, 'scannetv2_living_val.txt'), path_target)
 
+    # copy splits from archive path to target path (for training required)
+    for split_name in ['scannet_train.txt', 'scannet_val.txt', 'scannet_test.txt',
+                       'scannet_living_train.txt', 'scannet_living_val.txt', 'scannet_living_test.txt']:
+
+        path_split = os.path.join(path_archive, split_name)
+        if os.path.exists(path_split):
+            
+            # change paths inside info file
+            with open(path_split, 'r') as file:
+                data = file.read()
+            data = data.replace(path_archive, path_target)
+            path_split_new = os.path.join(path_target, split_name)
+            with open(path_split_new, 'w') as file:
+                file.write(data)
+
     # make subdirectories
-    os.makedirs(os.path.join(path_target, 'scans'))
-    os.makedirs(os.path.join(path_target, 'scans_test'))
-    #os.makedirs(os.path.join(path_target, "tasks"))
+    os.makedirs(os.path.join(path_target, 'scans'), exist_ok=True)
+    os.makedirs(os.path.join(path_target, 'scans_test'), exist_ok=True)
+    #os.makedirs(os.path.join(path_target, "tasks"), exist_ok=True)
 
     # collect scenes
     scenes = []
@@ -177,7 +217,7 @@ def main():
                         for scene in os.listdir(os.path.join(path_raw, 'scans_test'))])
         scenes += all_scenes[:args.num_scenes]
     
-    if not args.scenes and not args.scenes_file and not args.num_scenes:
+    if not args.scenes and not args.scenes_file and args.num_scenes <= 0:
         if not args.test_only:
             print(f"Building all scenes")
             scenes += sorted([os.path.join('scans', scene) 
