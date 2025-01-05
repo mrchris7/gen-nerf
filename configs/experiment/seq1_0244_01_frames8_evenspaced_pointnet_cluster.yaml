@@ -101,7 +101,7 @@ data:
   num_workers_train: 7
   num_workers_val: 7
   num_workers_test: 7
-  batch_size_train: 1  # Needs to be divisible by the number of devices
+  batch_size: 1  # Needs to be divisible by the number of devices
 
   sequence_amount_train: 1.0  # controls the number of sequences scene-denpendently
   sequence_amount_val: 1.0    # num_sequences = sequence_amount * (num_scene_frames / sequence_length)

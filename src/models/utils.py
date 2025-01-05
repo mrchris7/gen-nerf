@@ -1317,7 +1317,7 @@ def estimate_pointcloud_normals(points):
         [(-d, 0), (-d, d), (0, d), (d, d), (d, 0), (d, -d), (0, -d), (-d, -d)]
     ).to(points.device)
 
-    j, i = torch.meshgrid(torch.arange(W), torch.arange(H))
+    j, i = torch.meshgrid(torch.arange(W), torch.arange(H), indexing='ij')
     i = i.transpose(0, 1).to(points.device)
     j = j.transpose(0, 1).to(points.device)
     k = torch.arange(8).to(points.device)
@@ -1342,7 +1342,7 @@ def estimate_pointcloud_normals(points):
     diff[torch.isnan(diff)] = float('inf')
     indices = torch.argmin(diff, dim=0)
 
-    normals = torch.cross(
+    normals = torch.linalg.cross(
         points2[indices, i, j] - points1[i, j],
         points3[indices, i, j] - points1[i, j],
     )

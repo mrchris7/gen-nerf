@@ -21,7 +21,7 @@ class ScannetDataModule(LightningDataModule):
         num_workers_val: int,
         num_workers_test: int,
         pin_memory: bool,
-        batch_size_train: int,
+        batch_size: int,
         shuffle_train: bool,
         shuffle_val: bool,
         shuffle_test: bool,
@@ -71,7 +71,7 @@ class ScannetDataModule(LightningDataModule):
         self.data_test: Optional[Dataset] = None
         '''
 
-        self.batch_size_per_device = batch_size_train
+        self.batch_size_per_device = batch_size
 
         self.frame_types = ['depth']  # color is always loaded
         self.voxel_types = self.hparams.voxel_types
@@ -91,11 +91,11 @@ class ScannetDataModule(LightningDataModule):
         """
         # Divide batch size by the number of devices.
         if self.trainer is not None:
-            if self.hparams.batch_size_train % self.trainer.world_size != 0:
+            if self.hparams.batch_size % self.trainer.world_size != 0:
                 raise RuntimeError(
-                    f"Batch size ({self.hparams.batch_size_train}) is not divisible by the number of devices ({self.trainer.world_size})."
+                    f"Batch size ({self.hparams.batch_size}) is not divisible by the number of devices ({self.trainer.world_size})."
                 )
-            self.batch_size_per_device = self.hparams.batch_size_train // self.trainer.world_size
+            self.batch_size_per_device = self.hparams.batch_size // self.trainer.world_size
             
     def train_dataloader(self) -> DataLoader[Any]:
         """Create and return the train dataloader.
@@ -160,7 +160,7 @@ class ScannetDataModule(LightningDataModule):
         print(f"Validation Dataset len: {len(dataset)} (scenes: {len(dataset.info_files)})")
 
         dataloader = torch.utils.data.DataLoader(
-            dataset, batch_size=1, num_workers=self.hparams.num_workers_val, collate_fn=collate_fn,
+            dataset, batch_size=self.batch_size_per_device, num_workers=self.hparams.num_workers_val, collate_fn=collate_fn,
             shuffle=self.hparams.shuffle_val, drop_last=False, pin_memory=self.hparams.pin_memory
         )
         return dataloader

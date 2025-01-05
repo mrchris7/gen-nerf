@@ -510,8 +510,11 @@ class GenNerf(L.LightningModule):
 
         # visualize the prediction of the final batch and log it
         #is_last_batch = (batch_idx == len(self.trainer.val_dataloaders) - 1)
-        #if is_last_batch:      
-        #    self.geometric_reconstruction(batch, b_idx=0)  # assumes batch_size=1
+        #if is_last_batch:
+        #    b = 0
+        #    self.initialize_volume()
+        #    self.encode(batch['projection'][b:b+1], batch['image'][b:b+1], batch['depth'][b:b+1], 'val')  # encode images of whole sequence at once
+        #    self.geometric_reconstruction(batch, b_idx=b)
 
         return total_loss['combined']
 
@@ -526,7 +529,10 @@ class GenNerf(L.LightningModule):
         
         # visualize the prediction of the final batch and log it
         if is_last_batch:
-            self.geometric_reconstruction(batch, b_idx=0)  # assumes batch_size=1
+            b = 0
+            self.initialize_volume()
+            self.encode(batch['projection'][b:b+1], batch['image'][b:b+1], batch['depth'][b:b+1], 'val')  # encode images of whole sequence at once
+            self.geometric_reconstruction(batch, b_idx=b)
 
         return #total_loss['combined']
 
@@ -680,9 +686,10 @@ class GenNerf(L.LightningModule):
     def geometric_reconstruction(self, batch, b_idx=0):
         
         # get tsdfs
-        tsdf_pred = self.predict_tsdf(batch) # (B, nx, ny, nz)
+        tsdf_pred = self.predict_tsdf(batch, b_idx) # (B, nx, ny, nz)
         tsdf_trgt = batch['vol_%02d_tsdf'%self.voxel_sizes[0]].squeeze(1)  # (B, nx, ny, nz)
-        
+        tsdf_trgt = tsdf_trgt[b_idx:b_idx+1, ...]  # select batch (1, nx, ny, nz)
+
         # get tsdf objs
         tsdf_pred = self.postprocess_tsdf(tsdf_pred, self.origin)
         tsdf_trgt = self.postprocess_tsdf(tsdf_trgt, self.origin)
@@ -692,18 +699,18 @@ class GenNerf(L.LightningModule):
         meshes_trgt = self.extract_mesh(tsdf_trgt) # batch['origin']
         
         # log locally (for debugging)
-        self.logger.local.log_tsdf(tsdf_pred[b_idx], f'test_tsdf/test_pred_tsdf')
-        self.logger.local.log_tsdf(tsdf_trgt[b_idx], f'test_tsdf/test_trgt_tsdf')
-        self.logger.local.log_mesh(meshes_pred[b_idx], f'test_mesh/test_pred_mesh')
-        self.logger.local.log_mesh(meshes_trgt[b_idx], f'test_mesh/test_trgt_mesh')
+        self.logger.local.log_tsdf(tsdf_pred[0], f'test_tsdf/test_pred_tsdf')
+        self.logger.local.log_tsdf(tsdf_trgt[0], f'test_tsdf/test_trgt_tsdf')
+        self.logger.local.log_mesh(meshes_pred[0], f'test_mesh/test_pred_mesh')
+        self.logger.local.log_mesh(meshes_trgt[0], f'test_mesh/test_trgt_mesh')
         
         # log to wandb
         #self.logger.log_mesh(pred_mesh, 'test_pred_mesh')
         #self.logger.log_mesh(trgt_mesh, 'test_trgt_mesh')
-        self.log_rendered_images(meshes_pred, meshes_trgt, batch, b_idx)
+        self.log_rendered_images(meshes_pred[0], meshes_trgt[0], batch, b_idx)
 
     
-    def log_rendered_images(self, meshes_pred, meshes_trgt, batch, b_idx=0):
+    def log_rendered_images(self, meshe_pred, meshe_trgt, batch, b_idx=0):
         image = batch['image'] # (B, T, 3, H, W)
         depth = batch['depth'] # (B, T, H, W)
         pose = batch['pose']  # (B, T, 4, 4) camera2world
@@ -717,9 +724,9 @@ class GenNerf(L.LightningModule):
         poses = pose.transpose(0,1)
         intrinsicss = intrinsics.transpose(0,1)
 
-        overview_pose = compute_camera_pose(meshes_trgt[b_idx], intrinsicss[0][b_idx], W, H, margin=0.8)
-        renderer_pred, scene_pred = get_renderer(meshes_pred[b_idx], W, H, color=(0.75, 0.75, 0.75), light_pose=overview_pose)
-        renderer_trgt, scene_trgt = get_renderer(meshes_trgt[b_idx], W, H, color=(0.75, 0.75, 0.75), light_pose=overview_pose)
+        overview_pose = compute_camera_pose(meshe_trgt, intrinsicss[0][b_idx], W, H, margin=0.8)
+        renderer_pred, scene_pred = get_renderer(meshe_pred, W, H, color=(0.75, 0.75, 0.75), light_pose=overview_pose)
+        renderer_trgt, scene_trgt = get_renderer(meshe_trgt, W, H, color=(0.75, 0.75, 0.75), light_pose=overview_pose)
 
         caption = ['image', 'trgt_mesh', 'pred_mesh']
 
@@ -737,19 +744,20 @@ class GenNerf(L.LightningModule):
             self.logger.log_image(key=f'frame{i}', images=[image[b_idx], color_img_trgt, color_img_pred], caption=caption)
 
 
-    def predict_tsdf(self, batch):
+    def predict_tsdf(self, batch, b_idx):
 
         # get dimensions from target tsdf
-        tsdf_trgt = batch['vol_%02d_tsdf'%self.voxel_sizes[0]]  # (B, 1, nx, ny, nz)
-        tsdf_trgt = tsdf_trgt.squeeze(1)  # (B, nx, ny, nz)
-        B, nx, ny, nz = tsdf_trgt.shape
+        tsdf_trgt = batch['vol_%02d_tsdf'%self.voxel_sizes[0]].squeeze(1)  # (B, nx, ny, nz)
+        tsdf_trgt = tsdf_trgt[b_idx:b_idx+1, ...]  # select batch (1, nx, ny, nz)
+
+        _, nx, ny, nz = tsdf_trgt.shape
         volume_size = self.cfg.voxel_size * np.array(self.cfg.voxel_dim_test)
         
         # sample grid points
         grid_xyz = get_grid_coordinates(nx, ny, nz, volume_size, self.origin, device=self.device)  # (nx, ny, nz, 3)
         grid_xyz = grid_xyz.reshape(-1, 3)  # (N, 3)
         grid_xyz = grid_xyz.unsqueeze(0)  # (B=1, N, 3)
-        #grid_points = grid_points.repeat(B, 1, 1)  # (B, N, 3)  # opt. repeat B times
+        #grid_xyz = grid_xyz.repeat(B, 1, 1)  # (B, N, 3)  # opt. repeat B times
         grid_xyz.requires_grad_(True)
 
         # get predicted tsdf        
@@ -764,7 +772,7 @@ class GenNerf(L.LightningModule):
         tsdf_pred = torch.cat(chunk_list, dim=1)
         #outputs = self.forward(grid_xyz)
         #tsdf_pred = outputs['tsdf']  # (B, N, 1)
-        tsdf_pred = tsdf_pred.reshape(B, nx, ny, nz)  # (B, nx, ny, nz)
+        tsdf_pred = tsdf_pred.reshape(1, nx, ny, nz)  # (1, nx, ny, nz)
 
         # debug logging
         #print("vol-dims:", nx, ny, nz)

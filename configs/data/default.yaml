@@ -8,7 +8,7 @@ num_workers_train: 15
 num_workers_val: 15
 num_workers_test: 15
 pin_memory: False
-batch_size_train: 1  # Needs to be divisible by the number of devices (e.g., if in a distributed setup)
+batch_size: 1  # Needs to be divisible by the number of devices (e.g., if in a distributed setup)
 shuffle_train: True
 shuffle_val: False
 shuffle_test: False
