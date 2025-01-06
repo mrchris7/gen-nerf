@@ -62,7 +62,7 @@ def parse_arguments():
     parser.add_argument('--path_archive', default=PATH_ARCHIVE, help="Path to the scannet data that was exported and archived from the .sens file")
     parser.add_argument('--test_only', action='store_true', help="Only build the test set (if you dont plan to train)")
     parser.add_argument('--scenes', nargs='+', default=None, help="List of directories of specific scenes to build i.e. scans/scene0000_00, scans_test/scene0000_01, ...")
-    parser.add_argument('--scenes_file', default=None, help="Text file that contains a list of directories of specific scenes to read i.e. scans/scene0000_00, scans_test/scene0000_01, ...")
+    parser.add_argument('--scenes_file', default=None, help="Text file that contains a list of directories of specific scenes to build i.e. scans/scene0000_00, scans_test/scene0000_01, ...")
     parser.add_argument('--num_scenes', default=-1, type=int, help="Number of scenes to build")
     parser.add_argument('--extract_archives', action='store_true', help="Extract the .tar files for color, depth and poses")
     return parser.parse_args()
@@ -102,30 +102,6 @@ def build_scene(scene, path_target, path_raw, path_archive, extract_archives):
     path_scene_tar = os.path.join(path_archive, scene_f, scene_id)
     if os.path.exists(path_scene_tar):
         
-        #######################################
-        # When building for training:
-        #######################################
-        
-        # copy generated files from path_archive to path_target
-        for file in ['tsdf_04.npz', 'tsdf_08.npz', 'tsdf_16.npz',
-                     'mesh_04.ply', 'mesh_08.ply', 'mesh_16.ply']:
-            path_gen_file = os.path.join(path_scene_tar, file)
-            if os.path.exists(path_gen_file):
-                shutil.copy(path_gen_file, path_scene_target)
-
-        # if info file exists copy it and adjust paths
-        path_info = os.path.join(path_scene_tar, 'info.json')
-        if os.path.exists(path_info):
-            
-            # change paths inside info file
-            with open(path_info, 'r') as file:
-                data = file.read()
-            data = data.replace(path_archive, path_target)
-            path_info_new = os.path.join(path_scene_target, 'info.json')
-            with open(path_info_new, 'w') as file:
-                file.write(data)
-        #######################################
-        
         # copy raw files from path_archive to path_target
         for folder in ['intrinsics']:
             dir = os.path.join(path_scene_target, folder)
@@ -159,34 +135,12 @@ def main():
     path_archive = os.path.expandvars(args.path_archive)
 
     os.makedirs(path_target, exist_ok=True) 
-
-    # copy scannetv2-labels.combined.tsv
-    shutil.copy(os.path.join(path_raw, 'scannetv2-labels.combined.tsv'), path_target)
-
-    # copy splits
-    shutil.copy(os.path.join(path_raw, 'scannetv2_train.txt'), path_target)
-    shutil.copy(os.path.join(path_raw, 'scannetv2_test.txt'), path_target)
-    shutil.copy(os.path.join(path_raw, 'scannetv2_val.txt'), path_target)
-
-    # copy custom splits
-    shutil.copy(os.path.join(path_raw, 'scannetv2_living_train.txt'), path_target)
-    shutil.copy(os.path.join(path_raw, 'scannetv2_living_test.txt'), path_target)
-    shutil.copy(os.path.join(path_raw, 'scannetv2_living_val.txt'), path_target)
-
-    # copy splits from archive path to target path (for training required)
-    for split_name in ['scannet_train.txt', 'scannet_val.txt', 'scannet_test.txt',
-                       'scannet_living_train.txt', 'scannet_living_val.txt', 'scannet_living_test.txt']:
-
-        path_split = os.path.join(path_archive, split_name)
-        if os.path.exists(path_split):
-            
-            # change paths inside info file
-            with open(path_split, 'r') as file:
-                data = file.read()
-            data = data.replace(path_archive, path_target)
-            path_split_new = os.path.join(path_target, split_name)
-            with open(path_split_new, 'w') as file:
-                file.write(data)
+    
+    # copy split files (root layer)
+    for item in os.listdir(path_raw):
+        source_item = os.path.join(path_raw, item)
+        if os.path.isfile(source_item):
+            shutil.copy2(source_item, path_target)
 
     # make subdirectories
     os.makedirs(os.path.join(path_target, 'scans'), exist_ok=True)
