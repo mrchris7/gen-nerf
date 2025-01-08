@@ -23,3 +23,4 @@ voxel_types: ['tsdf']
 voxel_dim_train: [160, 160, 64]
 voxel_dim_val: [256, 256, 96]
 voxel_dim_test: [416, 416, 128]
+layers_down: null  # relevant only for voxel net

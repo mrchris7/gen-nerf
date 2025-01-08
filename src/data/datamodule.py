@@ -34,6 +34,7 @@ class ScannetDataModule(LightningDataModule):
         voxel_dim_train: list[int],
         voxel_dim_val: list[int],
         voxel_dim_test: list[int],
+        layers_down: int,
         dataset_type: str,
         # for ScenesSequencesDataset:
         sequence_amount_train: float,
@@ -71,11 +72,15 @@ class ScannetDataModule(LightningDataModule):
         self.data_test: Optional[Dataset] = None
         '''
 
-        self.batch_size_per_device = batch_size
+        self.batch_size_per_device = self.hparams.batch_size
 
         self.frame_types = ['depth']  # color is always loaded
         self.voxel_types = self.hparams.voxel_types
-        self.voxel_sizes = [int(self.hparams.voxel_size*100)]
+        if self.hparams.layers_down:
+            self.voxel_sizes = [int(self.hparams.voxel_size*100)*2**i for i in 
+                                range(len(self.hparams.layers_down)-1)]
+        else:
+            self.voxel_sizes = [int(self.hparams.voxel_size*100)]
 
 
     def setup(self, stage: Optional[str] = None) -> None:

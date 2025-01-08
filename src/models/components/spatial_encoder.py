@@ -32,7 +32,8 @@ class SpatialEncoder(nn.Module):
         norm_type="batch",
         blur_image=False,
         kernel_size=5,
-        sigma=1.0
+        sigma=1.0,
+        out_channels=None
     ):
         """
         :param backbone Backbone network. Either resnet18, resnet34 or resnet50 model from torchvision
@@ -69,6 +70,10 @@ class SpatialEncoder(nn.Module):
         self.model.fc = nn.Sequential()  # uncomment for older configs
         self.model.avgpool = nn.Sequential()  # uncomment for older configs
         self.latent_size = [0, 64, 128, 256, 512, 1024][num_layers]
+        
+        self.out_channels = out_channels
+        if self.out_channels:
+            self.conv = nn.Conv2d(self.latent_size, out_channels, kernel_size=1)
 
         self.num_layers = num_layers
         self.index_interp = index_interp
@@ -117,7 +122,8 @@ class SpatialEncoder(nn.Module):
         :param x image (B, C, H, W)
         :return latent (B, latent_size, H, W)  # (actually it is H/2, W/2)
         """
-        x = apply_gaussian_smoothing(x, kernel_size=41, sigma=10.0)
+        if self.blur_image:
+            x = apply_gaussian_smoothing(x, kernel_size=self.kernel_size, sigma=self.sigma)
         if self.feature_scale != 1.0:
             x = F.interpolate(
                 x,
@@ -165,10 +171,12 @@ class SpatialEncoder(nn.Module):
         self.latent_scaling[0] = self.latent.shape[-1]
         self.latent_scaling[1] = self.latent.shape[-2]
         self.latent_scaling = self.latent_scaling / (self.latent_scaling - 1) * 2.0
+        if self.out_channels:
+            self.latent = self.conv(self.latent)  # prepare for 3d-cnn
         return self.latent
 
     @classmethod
-    def from_conf(cls, cfg):
+    def from_conf(cls, cfg, out_channels=None):
         return cls(
             backbone=cfg.backbone,
             pretrained=cfg.pretrained,
@@ -179,4 +187,8 @@ class SpatialEncoder(nn.Module):
             feature_scale=cfg.feature_scale,
             use_first_pool=cfg.use_first_pool,
             norm_type=cfg.norm_type,
+            blur_image=cfg.blur_image,
+            kernel_size=cfg.kernel_size,
+            sigma=cfg.sigma,
+            out_channels=out_channels
         )

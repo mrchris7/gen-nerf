@@ -49,38 +49,69 @@ class TSDFHeadSimple(nn.Module):
         #tsdf = 1.7159 * torch.tanh(2/3 * y)
         return tsdf
     
+
+class VoxelHeads(nn.Module):
+    """ Module that contains all the 3D output heads
+    
+    Features extracted by the 3D network are passed to this to produce the
+    final outputs. Each type of output is added as a head and is responsible
+    for returning a dict of outputs and a dict of losses
+    """
+
+    def __init__(self, cfg, channels, voxel_size):
+        super().__init__()
+        self.heads = nn.ModuleList()
+
+        if cfg.use_tsdf:
+            self.heads.append(TSDFHead(cfg.tsdf, channels, voxel_size))
+
+        #if cfg.use_feature:
+        #    self.heads.append(FeatureHead(cfg.feature))
+
+
+    def forward(self, x, targets=None):
+        outputs = {}
+        losses = {}
+
+        for head in self.heads:
+            out, loss = head(x, targets)
+            outputs = { **outputs, **out }
+            losses = { **losses, **loss }
+
+        return outputs, losses
+
     
 class TSDFHead(nn.Module):
     """ Main head that regresses the TSDF"""
 
     def __init__(self, cfg, channels, voxel_size):
         super().__init__()
-        self.label_smoothing = cfg.label_smoothing
-        self.split_loss = cfg.loss_split
-        self.sparse_threshold = cfg.sparse_threshold
+
         self.multi_scale = cfg.multi_scale
+        self.loss_weight = cfg.loss_weight
+        self.label_smoothing = cfg.label_smoothing
+        self.loss_split = cfg.loss_split
         self.loss_log_transform = cfg.loss_log_transform
         self.loss_log_transform_shift = cfg.loss_log_transform_shift
-        self.loss_weight = cfg.loss_weight
-        self.channels = channels
-        
-        scales = len(self.channels)-1
+        self.sparse_threshold = cfg.sparse_threshold
+
+        scales = len(channels)-1
         final_size = int(voxel_size*100)
-        
+
         if self.multi_scale:
             self.voxel_sizes = [final_size*2**i for i in range(scales)][::-1]
             decoders = [nn.Conv3d(c, 1, 1, bias=False) 
-                        for c in self.channels[:-1]][::-1]
+                        for c in channels[:-1]][::-1]
         else:
             self.voxel_sizes = [final_size]
-            decoders = [nn.Conv3d(self.channels[0], 1, 1, bias=False)]
-        
-        
+            decoders = [nn.Conv3d(channels[0], 1, 1, bias=False)]
+
         self.decoders = nn.ModuleList(decoders)
 
 
-    def forward(self, xs):
+    def forward(self, xs, targets=None):
         output = {}
+        losses = {}
         mask_surface_pred = []
 
         if not self.multi_scale:
@@ -91,7 +122,7 @@ class TSDFHead(nn.Module):
             tsdf = torch.tanh(decoder(x)) * self.label_smoothing
 
             # use previous scale to sparsify current scale
-            if self.split_loss=='pred' and i>0:
+            if self.loss_split=='pred' and i>0:
                 tsdf_prev = output['vol_%02d_tsdf'%self.voxel_sizes[i-1]]
                 tsdf_prev = F.interpolate(tsdf_prev, scale_factor=2)
                 # FIXME: when using float16, why is interpolate casting to float32?
@@ -99,53 +130,50 @@ class TSDFHead(nn.Module):
                 mask_surface_pred_prev = tsdf_prev.abs()<self.sparse_threshold[i-1]
                 # .999 so we don't close surfaces during mc
                 tsdf[~mask_surface_pred_prev] = tsdf_prev[~mask_surface_pred_prev].sign()*.999
-                mask_surface_pred.append(mask_surface_pred_prev)
+                mask_surface_pred.append( mask_surface_pred_prev )
 
             output['vol_%02d_tsdf'%self.voxel_sizes[i]] = tsdf
-        
-        output['mask_surface_pred'] = mask_surface_pred  # for loss calculation
 
-        return output
+        # compute losses
+        if targets is not None:
+            for i, voxel_size in enumerate(self.voxel_sizes):
+                key = 'vol_%02d_tsdf'%voxel_size
+                loss_key = 'vol_%02d_tsdf_loss'%voxel_size
+                pred = output[key]
+                trgt = targets[key]
 
-    def calculate_loss(self, outputs, targets):
-        losses = {}
-        for i, voxel_size in enumerate(self.voxel_sizes):
-            key = 'vol_%02d_tsdf'%voxel_size
-            tsdf_pred = outputs[key]
-            tsdf = targets[key]
+                mask_observed = trgt<1
+                mask_outside  = (trgt==1).all(-1, keepdim=True)
 
-            mask_observed = tsdf<1
-            mask_outside  = (tsdf==1).all(-1, keepdim=True)
+                # TODO: extend mask_outside (in heads:loss) to also include 
+                # below floor... maybe modify padding_mode in tsdf.transform... 
+                # probably cleaner to look along slices similar to how we look
+                # along columns for outside.
 
-            # TODO: extend mask_outside (in heads:loss) to also include 
-            # below floor... maybe modify padding_mode in tsdf.transform... 
-            # probably cleaner to look along slices similar to how we look
-            # along columns for outside.
+                if self.loss_log_transform:
+                    pred = log_transform(pred, self.loss_log_transform_shift)
+                    trgt = log_transform(trgt, self.loss_log_transform_shift)
 
-            if self.loss_log_transform:
-                tsdf_pred = log_transform(tsdf_pred, self.loss_log_transform_shift)
-                tsdf = log_transform(tsdf, self.loss_log_transform_shift)
+                loss = F.l1_loss(pred, trgt, reduction='none') * self.loss_weight
 
-            loss = F.l1_loss(tsdf_pred, tsdf, reduction='none') * self.loss_weight
+                if self.loss_split=='none':
+                    losses[loss_key] = loss[mask_observed | mask_outside].mean()
 
-            if self.split_loss=='none':
-                losses[key] = loss[mask_observed | mask_outside].mean()
-
-            elif self.split_loss=='pred':
-                if i==0:
-                    # no sparsifing mask for first resolution
-                    losses[key] = loss[mask_observed | mask_outside].mean()
-                else:
-                    mask = outputs['mask_surface_pred'][i-1] & (mask_observed | mask_outside)
-                    if mask.sum()>0:
-                        losses[key] = loss[mask].mean()
+                elif self.loss_split=='pred':
+                    if i==0:
+                        # no sparsifing mask for first resolution
+                        losses[loss_key] = loss[mask_observed | mask_outside].mean()
                     else:
-                        losses[key] = 0*loss.sum()
+                        mask = mask_surface_pred[i-1] & (mask_observed | mask_outside)
+                        if mask.sum()>0:
+                            losses[loss_key] = loss[mask].mean()
+                        else:
+                            losses[loss_key] = 0*loss.sum()
 
-            else:
-                raise NotImplementedError(f"TSDF loss split [{self.split_loss}] not supported")
-        
-        return sum(losses.values())
+                else:
+                    raise NotImplementedError("TSDF loss split [%s] not supported"%self.split_loss_empty)
+
+        return output, losses
 
 '''
 class SemSegHead(nn.Module):

@@ -118,8 +118,12 @@ class GenNerf(L.LightningModule):
             
             if self.cfg.encoder.use_spatial or self.cfg.encoder.use_auxiliary:
                 volume, valid = backproject(voxel_dim, self.cfg.voxel_size, self.origin, projection, feat_2d)
-                self.volume = self.volume + volume
-                self.valid = self.valid + valid
+                if self.volume == None:
+                    self.volume = volume
+                    self.valid = valid
+                else:
+                    self.volume = self.volume + volume
+                    self.valid = self.valid + valid
 
 
             # accumulate a sparse 3D point cloud (later passed into PointNet):

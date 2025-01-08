@@ -207,10 +207,17 @@ class EncoderDecoder(nn.Module):
 
         return out
 
-
-def build_backbone3d(cfg):
-    return EncoderDecoder(
-        cfg.MODEL.BACKBONE3D.CHANNELS, cfg.MODEL.BACKBONE3D.LAYERS_DOWN,
-        cfg.MODEL.BACKBONE3D.LAYERS, cfg.MODEL.BACKBONE3D.NORM,
-        cfg.MODEL.BACKBONE3D.DROP, True, cfg.MODEL.BACKBONE3D.CONDITIONAL_SKIP
-    )
+    @classmethod
+    def from_conf(cls, cfg): 
+        # channels=[32,64,128], layers_down=[1,2,3],
+        #layers_up=[3,3,3], norm='BN', drop=0, zero_init_residual=True,
+        #cond_proj=True
+        return cls(
+            channels = cfg.channels,
+            layers_down = cfg.layers_down,
+            layers_up = cfg.layers,
+            norm = cfg.norm,
+            drop = cfg.drop,
+            zero_init_residual = True,
+            cond_proj = cfg.conditional_skip
+        )
