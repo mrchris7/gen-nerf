@@ -50,6 +50,21 @@ echo ------------------------------------------
 PROJECT=. # i.e. $HOME/workspace/gennerf/gen-nerf
 ARGS=${@:1}
 
+PATH_DATA=/anvme/workspace/g101ea13-databox/data/scannet
+
+# execute
+CMD="python $PROJECT/scripts/staging.py\
+ --path_src $PATH_DATA\
+ --path_des $TMPDIR/data/scannet\
+ --extract_archives
+ --scenes_file /home/hpc/g101ea/g101ea13/workspace/gennerf/gen-nerf/splits/scenes_file_living.txt"
+ 
+echo ${CMD}
+${CMD}
+
+echo "Dataset staged!"
+
+
 # execute
 CMD="python $PROJECT/src/train.py $ARGS"
 

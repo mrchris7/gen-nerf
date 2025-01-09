@@ -22,7 +22,7 @@
 # SBATCH --mem-per-cpu=3250M  # outdated
 
 # Max time (hh:mm:ss)
-#SBATCH --time=06:00:00
+#SBATCH --time=19:00:00
 
 # load modules
 unset SLURM_EXPORT_ENV

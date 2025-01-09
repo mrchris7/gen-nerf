@@ -12,7 +12,7 @@
 #SBATCH --error=/home/hpc/g101ea/g101ea13/job_out/slurm_job_%A.err
 
 # Hardware
-#SBATCH --gres=gpu:a40:1
+#SBATCH --gres=gpu:a40:4
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 
@@ -60,11 +60,32 @@ ${CMD}
 
 echo "Dataset built!"
 
-CMD="python $PROJECT/src/data/prepare/prepare_data.py\
- --path $TMPDIR/data/scannet\
- --path_meta $WORK/data/scannet --skip_existing"
-echo ${CMD}
-${CMD}
+CMD1="python $PROJECT/src/data/prepare/prepare_data.py --i 0 --n 4 --path $TMPDIR/data/scannet --path_meta $PATH_DATA"
+CMD2="python $PROJECT/src/data/prepare/prepare_data.py --i 1 --n 4 --path $TMPDIR/data/scannet --path_meta $PATH_DATA"
+CMD3="python $PROJECT/src/data/prepare/prepare_data.py --i 2 --n 4 --path $TMPDIR/data/scannet --path_meta $PATH_DATA"
+CMD4="python $PROJECT/src/data/prepare/prepare_data.py --i 3 --n 4 --path $TMPDIR/data/scannet --path_meta $PATH_DATA"
+
+# Run the commands in parallel
+echo "Running commands:"
+echo "${CMD1}"
+echo "${CMD2}"
+echo "${CMD3}"
+echo "${CMD4}"
+
+${CMD1} &
+PID1=$!
+${CMD2} &
+PID2=$!
+${CMD3} &
+PID3=$!
+${CMD4} &
+PID4=$!
+
+wait $PID1
+wait $PID2
+wait $PID3
+wait $PID4
+
 EXITCODE=$?
 
 # wait until all processes finish and then return exitcode
