@@ -1,0 +1,10 @@
+# mainly used for dataloading of predictions for the evaluation
+defaults:
+  - gpu
+
+dataset_type: 'scenes'  # 'sequences' or 'frame' or 'scene' or 'scenes'
+num_frames_train: 20  # number of frames to select from a sequence
+num_frames_val: 20
+num_frames_test: 200
+frame_locations: 'evenly_spaced'  # 'random' or 'evenly_spaced'
+frame_order: 'sorted'  # 'random' or 'sorted'

@@ -1,0 +1,40 @@
+# @package _global_
+
+defaults:
+  - override /data: scenes_living
+  - override /logger: null
+  - override /trainer: gpu
+  - override /paths: cluster
+
+# all parameters below will be merged with parameters from default configurations set above
+# this allows you to overwrite only specified parameters
+
+tags: ['dev', 'predict', 'cluster', 'scenes', 'living', 'geometric', 'v2']
+
+seed: 0
+
+trainer:
+  devices: 1
+  num_nodes: 1
+  min_epochs: 1
+  max_epochs: 1
+  log_every_n_steps: 1
+
+data:
+  datasets_test: ['scannet_living_test.txt']
+  num_workers_test: 1
+
+  num_frames_test: 1 # -1
+  frame_locations: 'evenly_spaced'  # 'random' or 'evenly_spaced'
+  frame_order: 'sorted'  # 'random' or 'sorted'
+  
+  voxel_size: .04
+  voxel_dim_test: [256, 256, 64] #z=96 # [416, 416, 128]
+  layers_down: [1, 2, 3, 4]  # same as in model.backbone3d.layers_down
+
+logger:
+  wandb_local:
+    #name: ""
+    entity: "generalizable-nerfs"
+    offline: False
+    mute_local: True # False

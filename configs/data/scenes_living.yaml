@@ -1,0 +1,6 @@
+defaults:
+  - scenes
+
+datasets_train: ['scannet_living_train.txt']
+datasets_val: ['scannet_living_val.txt']
+datasets_test: ['scannet_living_test.txt']

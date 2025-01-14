@@ -1,7 +1,7 @@
 defaults:
   - gpu
 
-dataset_type: 'sequences'  # 'sequences' or 'frame' or 'scene'
+dataset_type: 'sequences'  # 'sequences' or 'frame' or 'scene' or 'scenes'
 sequence_amount_train: 0.8  # controls the number of sequences scene-denpendently
                             # num_sequences = sequence_amount * (num_scene_frames / sequence_length)
 sequence_amount_val: 0.8
@@ -12,5 +12,5 @@ sequence_order: 'random'  # 'random' or 'sorted' (only effective if shuffle=Fals
 num_frames_train: 20  # number of frames to select from a sequence
 num_frames_val: 20
 num_frames_test: 20
-frame_locations: 'evenly_spaced'  # 'free' or 'evenly_spaced'
+frame_locations: 'evenly_spaced'  # 'random' or 'evenly_spaced'
 frame_order: 'random'  # 'random' or 'sorted'
