@@ -513,12 +513,12 @@ class GenNerf(L.LightningModule):
         self.log_loss(total_loss, B, 'val')
 
         # visualize the prediction of the final batch and log it
-        #is_last_batch = (batch_idx == len(self.trainer.val_dataloaders) - 1)
-        #if is_last_batch:
-        #    b = 0
-        #    self.initialize_volume()
-        #    self.encode(batch['projection'][b:b+1], batch['image'][b:b+1], batch['depth'][b:b+1], 'val')  # encode images of whole sequence at once
-        #    self.geometric_reconstruction(batch, b_idx=b)
+        is_last_batch = (batch_idx == len(self.trainer.val_dataloaders) - 1)
+        if is_last_batch:
+            b = 0
+            self.initialize_volume()
+            self.encode(batch['projection'][b:b+1], batch['image'][b:b+1], batch['depth'][b:b+1], 'val')  # encode images of whole sequence at once
+            self.geometric_reconstruction("val", batch, b_idx=b)
 
         return total_loss['combined']
 
@@ -536,7 +536,7 @@ class GenNerf(L.LightningModule):
             b = 0
             self.initialize_volume()
             self.encode(batch['projection'][b:b+1], batch['image'][b:b+1], batch['depth'][b:b+1], 'val')  # encode images of whole sequence at once
-            self.geometric_reconstruction(batch, b_idx=b)
+            self.geometric_reconstruction("test", batch, b_idx=b)
 
         return #total_loss['combined']
 
@@ -687,7 +687,7 @@ class GenNerf(L.LightningModule):
             total_loss = add_dicts(total_loss, loss)
         return total_loss
     
-    def geometric_reconstruction(self, batch, b_idx=0):
+    def geometric_reconstruction(self, mode, batch, b_idx=0):
         
         # get tsdfs
         tsdf_pred = self.predict_tsdf(batch, b_idx) # (B, nx, ny, nz)
@@ -711,10 +711,10 @@ class GenNerf(L.LightningModule):
         # log to wandb
         #self.logger.log_mesh(pred_mesh, 'test_pred_mesh')
         #self.logger.log_mesh(trgt_mesh, 'test_trgt_mesh')
-        self.log_rendered_images(meshes_pred[0], meshes_trgt[0], batch, b_idx)
+        self.log_rendered_images(meshes_pred[0], meshes_trgt[0], mode, batch, b_idx)
 
     
-    def log_rendered_images(self, meshe_pred, meshe_trgt, batch, b_idx=0):
+    def log_rendered_images(self, meshe_pred, meshe_trgt, mode, batch, b_idx=0):
         image = batch['image'] # (B, T, 3, H, W)
         depth = batch['depth'] # (B, T, H, W)
         pose = batch['pose']  # (B, T, 4, 4) camera2world
@@ -740,12 +740,12 @@ class GenNerf(L.LightningModule):
                 # add overview image of meshes
                 color_ov_img_pred, _ = render(renderer_pred, scene_pred, intrinsics[b_idx], overview_pose)
                 color_ov_img_trgt, _ = render(renderer_trgt, scene_trgt, intrinsics[b_idx], overview_pose)
-                self.logger.log_image(key=batch['scene'][b_idx], images=[color_ov_img_trgt, color_ov_img_pred], caption=caption[1:3])
+                self.logger.log_image(key=f"{mode}_{batch['scene'][b_idx]}", images=[color_ov_img_trgt, color_ov_img_pred], caption=caption[1:3])
             
             # add near images of meshes
             color_img_pred, _ = render(renderer_pred, scene_pred, intrinsics[b_idx], pose[b_idx])
             color_img_trgt, _ = render(renderer_trgt, scene_trgt, intrinsics[b_idx], pose[b_idx])
-            self.logger.log_image(key=f'frame{i}', images=[image[b_idx], color_img_trgt, color_img_pred], caption=caption)
+            self.logger.log_image(key=f'{mode}_frame{i}', images=[image[b_idx], color_img_trgt, color_img_pred], caption=caption)
 
 
     def predict_tsdf(self, batch, b_idx):

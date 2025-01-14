@@ -7,6 +7,7 @@ from_archive: False  # whether data needs to be loaded from archive
 num_workers_train: 15
 num_workers_val: 15
 num_workers_test: 15
+persistent_workers: False  # default: False
 pin_memory: False
 batch_size: 1  # Needs to be divisible by the number of devices (e.g., if in a distributed setup)
 shuffle_train: True

@@ -31,7 +31,7 @@ def replace_in_file(file_path, search_text, replace_text):
 
 def stage_scene(scene, path_src, path_des, extract_archives):
 
-    print("Stage scene:", scene)
+    #print("Stage scene:", scene)
 
     path_scene_src = os.path.join(path_src, scene)
     path_scene_des = os.path.join(path_des, scene)
@@ -126,9 +126,6 @@ def main():
     # remove duplicates and sort
     scenes = sorted(list(dict.fromkeys(scenes)))
     print("Scenes to stage:", len(scenes))
-
-    for scene in scenes:
-        print(scene)
 
     # scenes contain: "scans/scene0000_00" or "scans_test/scene0000_00"
     pbar = tqdm.tqdm()

@@ -22,3 +22,5 @@ deterministic: False
 
 benchmark: true  # from Atlas
 #amp_level: 'O1'  # from Atlas, deprecated...
+
+num_sanity_val_steps: 2  # default: 2

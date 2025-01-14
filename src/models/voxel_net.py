@@ -21,11 +21,14 @@ os.environ['PYOPENGL_PLATFORM'] = 'egl'  # use EGL for rendering
 os.environ['LIBGL_ALWAYS_SOFTWARE'] = '1'  # force software rendering
 
 
+log = RankedLogger(__name__)
+
 
 class VoxelNet(L.LightningModule):
     def __init__(self, cfg):
         super().__init__()
-        self.cfg = cfg
+        self.save_hyperparameters(cfg)
+        self.cfg = cfg  # TODO: excange self.cfg with self.hparams
 
         # teacher net
         self.f_teacher = None  # TODO
@@ -70,7 +73,7 @@ class VoxelNet(L.LightningModule):
         # pointnet encoder
         self.c_plane = None
     
-    def encode(self, projection, image, depth, mode):
+    def encode(self, projection, image, depth):
         """ Encodes image and corresponding pointcloud into a 3D feature volume and 
         accumulates them. This is the first half of the network which
         is run on T frames. Can be called multiple times.
@@ -262,7 +265,7 @@ class VoxelNet(L.LightningModule):
             loss_dict = {}
             for key, val in losses.items():
                 loss_dict[f'{mode}_{key}'] = val
-            self.log_dict(loss_dict, batch_size=B, sync_dist=True)
+            self.log_dict(loss_dict, batch_size=B, sync_dist=True, on_epoch=True)
             
 
 
@@ -276,7 +279,7 @@ class VoxelNet(L.LightningModule):
         B = image.shape[0]
 
         self.initialize_volume()
-        self.encode(projection, image, depth, 'train')  # encode images of whole sequence at once
+        self.encode(projection, image, depth)  # encode images of whole sequence at once
         # TODO: test merging vs processing all observations at once
 
         #self.origin = batch['origin']
@@ -297,7 +300,7 @@ class VoxelNet(L.LightningModule):
         B = image.shape[0]
 
         self.initialize_volume()
-        self.encode(projection, image, depth, 'val')  # encode images of whole sequence at once
+        self.encode(projection, image, depth)  # encode images of whole sequence at once
         # TODO: test merging vs processing all observations at once
 
         #self.origin = batch['origin']
@@ -308,14 +311,15 @@ class VoxelNet(L.LightningModule):
 
         self.log_loss(losses, B, 'val')
         
-        # visualize the prediction of the final batch and log it
-        is_last_batch = (batch_idx == len(self.trainer.val_dataloaders) - 1)
-        if is_last_batch:
-            b = 0
-            self.initialize_volume()
-            self.encode(batch['projection'][b:b+1], batch['image'][b:b+1], batch['depth'][b:b+1], 'val')  # encode images of whole sequence at once
-            self.geometric_reconstruction(batch, outputs, b_idx=b)
-
+        # only on 1 gpu: visualize the prediction of the final batch and log it
+        if self.global_rank == 0:
+            is_last_batch = (batch_idx == len(self.trainer.val_dataloaders) - 1)
+            if is_last_batch:
+                b = 0
+                self.initialize_volume()
+                self.encode(batch['projection'][b:b+1], batch['image'][b:b+1], batch['depth'][b:b+1])  # encode images of whole sequence at once
+                self.geometric_reconstruction("val", batch, outputs, b_idx=b)
+                
         return loss
 
     def test_step(self, batch, batch_idx):
@@ -325,7 +329,7 @@ class VoxelNet(L.LightningModule):
         B = image.shape[0]
 
         self.initialize_volume()
-        self.encode(projection, image, depth, 'test')  # encode images of whole sequence at once
+        self.encode(projection, image, depth)  # encode images of whole sequence at once
         # TODO: test merging vs processing all observations at once
 
         #self.origin = batch['origin']
@@ -336,18 +340,18 @@ class VoxelNet(L.LightningModule):
 
         self.log_loss(losses, B, 'test')
         
-        # visualize the prediction of the final batch and log it
-        is_last_batch = (batch_idx == len(self.trainer.val_dataloaders) - 1)
-        if is_last_batch:
-            b = 0
-            self.initialize_volume()
-            self.encode(batch['projection'][b:b+1], batch['image'][b:b+1], batch['depth'][b:b+1], 'test')  # encode images of whole sequence at once
-            self.geometric_reconstruction(batch, outputs, b_idx=b)
+        ## only on 1 gpu: visualize the prediction of the final batch and log it
+        #if self.global_rank == 0:  # Ensure this condition for GPU 0 only
+        #    is_last_batch = (batch_idx == len(self.trainer.test_dataloaders) - 1)
+        #    if is_last_batch:
+        #        b = 0
+        #        self.initialize_volume()
+        #        self.encode(batch['projection'][b:b+1], batch['image'][b:b+1], batch['depth'][b:b+1])  # encode images of whole sequence at once
+        #        self.geometric_reconstruction("test", batch, outputs, b_idx=b)
 
         return loss
 
-    
-    def geometric_reconstruction(self, batch, outputs, b_idx=0):
+    def geometric_reconstruction(self, mode, batch, outputs, b_idx=0):
         
         # save validation meshes
         pred_tsdfs = self.postprocess(outputs)
@@ -366,10 +370,10 @@ class VoxelNet(L.LightningModule):
         # log to wandb
         #self.logger.log_mesh(meshes_pred[0], 'test_pred_mesh')
         #self.logger.log_mesh(meshes_trgt[0], 'test_trgt_mesh')
-        self.log_rendered_images(meshes_pred[0], meshes_trgt[0], batch, b_idx)
+        self.log_rendered_images(meshes_pred[0], meshes_trgt[0], mode, batch, b_idx, num_logged_frames=1)
 
     
-    def log_rendered_images(self, meshe_pred, meshe_trgt, batch, b_idx=0):
+    def log_rendered_images(self, meshe_pred, meshe_trgt, mode, batch, b_idx=0, num_logged_frames=10):
         image = batch['image'] # (B, T, 3, H, W)
         depth = batch['depth'] # (B, T, H, W)
         pose = batch['pose']  # (B, T, 4, 4) camera2world
@@ -391,13 +395,17 @@ class VoxelNet(L.LightningModule):
 
         for i, (image, pose, intrinsics) in enumerate(zip(images, poses, intrinsicss)):
             
+            if i >= num_logged_frames:
+                #log.info("Stopped logging reconstruction results.")
+                break  # prevent too much logging
+
             if i == 0:
                 # add overview image of meshes
                 color_ov_img_pred, _ = render(renderer_pred, scene_pred, intrinsics[b_idx], overview_pose)
                 color_ov_img_trgt, _ = render(renderer_trgt, scene_trgt, intrinsics[b_idx], overview_pose)
-                self.logger.log_image(key=batch['scene'][b_idx], images=[color_ov_img_trgt, color_ov_img_pred], caption=caption[1:3])
+                self.logger.log_image(key=f"{mode}_{batch['scene'][b_idx]}", images=[color_ov_img_trgt, color_ov_img_pred], caption=caption[1:3])
             
             # add near images of meshes
             color_img_pred, _ = render(renderer_pred, scene_pred, intrinsics[b_idx], pose[b_idx])
             color_img_trgt, _ = render(renderer_trgt, scene_trgt, intrinsics[b_idx], pose[b_idx])
-            self.logger.log_image(key=f'frame{i}', images=[image[b_idx], color_img_trgt, color_img_pred], caption=caption)
+            self.logger.log_image(key=f"{mode}_{batch['scene'][b_idx]}_frame{i}", images=[image[b_idx], color_img_trgt, color_img_pred], caption=caption)

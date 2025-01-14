@@ -95,6 +95,7 @@ def setup_camera(scene, intrinsics, pose, distance_offset):
 
     # flip pose for correct camera direction
     pose = pose.clone()
+    pose[-1] = torch.tensor([0.0, 0.0, 0.0, 1.0], device=pose.device)  # fix numerical issue
     pose[:3, 2] = -pose[:3, 2]  # flip Z-axis
     pose[:3, 1] = -pose[:3, 1]  # maintain right-handed system
 

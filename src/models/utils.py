@@ -43,6 +43,8 @@ def get_norm_layer(norm_type="batch"):
     """
     if norm_type == "batch":
         norm_layer = functools.partial(nn.BatchNorm2d, affine=True, track_running_stats=True)
+    elif norm_type == "sync_batch":
+        norm_layer = functools.partial(nn.SyncBatchNorm, affine=True, track_running_stats=True)
     elif norm_type == "instance":
         norm_layer = functools.partial(nn.InstanceNorm2d, affine=False, track_running_stats=False)
     elif norm_type == "none":
@@ -526,7 +528,7 @@ def sample_points_on_rays(h_idxs, w_idxs, depths, intrinsics, poses, N, M, delta
     xyz_camera_hom = torch.cat((xyz_camera, torch.ones(B, num_points, 1, device=device)), dim=-1)  # (B, num_points, 4)
 
     # transform from camera to world coordinates
-    xyz_world_hom = torch.bmm(poses, xyz_camera_hom.permute(0, 2, 1)).permute(0, 2, 1)  # (B, num_points, 4)
+    xyz_world_hom = torch.bmm(poses, xyz_camera_hom.permute(0, 2, 1)).permute(0, 2, 1)  # (B, num_points, 4)  (gets non-contiguous here)
 
     # convert back to cartesian coordinates
     xyz_world = xyz_world_hom[:, :, :3] / xyz_world_hom[:, :, 3:] # (B, num_points, 3)
@@ -1059,15 +1061,15 @@ def trilinear_interpolation_suboptimal(voxel_volume, xyz, origin, voxel_size):
 
     # normalize world positions xyz between -1 and 1
     xyz = xyz - origin.to(device)
-    xyz = xyz / torch.tensor([nx, ny, nz]).to(device) * voxel_size
+    xyz = xyz / torch.tensor([nx, ny, nz], device=device) * voxel_size
     xyz = 2 * xyz - 1
     xyz = xyz.float()
     
     voxel_volume = voxel_volume.permute(0, 4, 3, 2, 1)  # (N, C, D_in, H_in, W_in)  # TODO: check if D=nx, H=ny, W=nz
 
-    features = torch.empty(B, N, C).to(device)
+    features = torch.empty(B, N, C, device=device)
     for batch in range(B):
-        feat = torch.empty(N, C).to(device)
+        feat = torch.empty(N, C, device=device)
         for i in range(N):
             sample = torch.reshape(xyz[batch, i], [1, 1, 1, 1, 3])  # (N, D_, H_, W_, 3)
             f = F.grid_sample(voxel_volume, sample, 'bilinear', align_corners=True)

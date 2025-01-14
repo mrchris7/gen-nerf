@@ -51,7 +51,7 @@ class SpatialEncoder(nn.Module):
 
         super().__init__()
 
-        if norm_type != "batch":
+        if norm_type != "batch" and norm_type != "sync_batch":
             assert not pretrained
 
         self.use_custom_resnet = backbone == "custom"
@@ -73,7 +73,9 @@ class SpatialEncoder(nn.Module):
         
         self.out_channels = out_channels
         if self.out_channels:
-            self.conv = nn.Conv2d(self.latent_size, out_channels, kernel_size=1)
+            #self.conv = nn.Conv2d(self.latent_size, out_channels, kernel_size=1) #for resnet34
+            self.conv = nn.Conv2d(1856, out_channels, kernel_size=1) # for resnet50
+            
 
         self.num_layers = num_layers
         self.index_interp = index_interp
