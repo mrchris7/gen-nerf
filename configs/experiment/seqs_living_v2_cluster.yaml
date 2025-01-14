@@ -14,23 +14,23 @@ defaults:
 # all parameters below will be merged with parameters from default configurations set above
 # this allows you to overwrite only specified parameters
 
-tags: ['dev', 'cluster', 'seqs', 'living10', 'geometric', 'v2']
+tags: ['dev', 'cluster', 'seqs', 'living', 'geometric', 'v2']
 
 seed: 0
 
 trainer:
   devices: 4
   num_nodes: 1
-  min_epochs: 600
-  max_epochs: 600
-  log_every_n_steps: 10
-  check_val_every_n_epoch: 10
+  min_epochs: 15
+  max_epochs: 15
+  log_every_n_steps: 25
+  check_val_every_n_epoch: 1
   strategy:
     find_unused_parameters: True # if encoder.spatial is used and DDP
 
 model:
   optimizer:
-    lr: 0.0001
+    lr: 0.0001 # 0.0001
     weight_decay: 0.0001
   scheduler:
     step_size: 10000
@@ -40,7 +40,7 @@ model:
   encoder:
     use_spatial: True
     spatial:
-      backbone: 'resnet34'  # resnet18, resnet34, resnet50
+      backbone: 'resnet50' # resnet18, resnet34, resnet50
       pretrained: True
       num_layers: 4 # latent_size = [0, 64, 128, 256, 512, 1024][num_layers]  # initially 4 -> CUDA out of memory
       index_interp: 'bilinear'
@@ -84,14 +84,14 @@ model:
       sparse_threshold: [.99, .99, .99]
 
 data:
-  datasets_train: ['scannet_living10_train.txt']
-  datasets_val: ['scannet_living10_train.txt']
-  datasets_test: ['scannet_living10_test.txt']
+  datasets_train: ['scannet_living_train.txt']
+  datasets_val: ['scannet_living_val.txt']
+  datasets_test: ['scannet_living_test.txt']
 
   num_workers_train: 1
   num_workers_val: 1
   num_workers_test: 1
-  batch_size: 16  # (12 is more save) # Needs to be divisible by the number of devices
+  batch_size: 12  # Needs to be divisible by the number of devices
   
   sequence_amount_train: 1.0  # controls the number of sequences scene-denpendently
   sequence_amount_val: 1.0    # num_sequences = sequence_amount * (num_scene_frames / sequence_length)
@@ -106,9 +106,9 @@ data:
   frame_order: 'random'  # 'random' or 'sorted'
   
   voxel_size: .04
-  voxel_dim_train: [256, 256, 64] # [160, 160, 64]
-  voxel_dim_val: [256, 256, 64] # [256, 256, 96]
-  voxel_dim_test: [256, 256, 64] # [416, 416, 128]
+  voxel_dim_train: [256, 256, 64]
+  voxel_dim_val: [256, 256, 64]
+  voxel_dim_test: [256, 256, 64]
   layers_down: ${model.backbone3d.layers_down}
 
 logger:

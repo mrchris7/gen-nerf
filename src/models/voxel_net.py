@@ -34,7 +34,9 @@ class VoxelNet(L.LightningModule):
         encoder_latent = 0  # total dimension from all encoders
         if cfg.encoder.use_spatial:
             self.spatial = SpatialEncoder.from_conf(cfg.encoder.spatial, cfg.backbone3d.channels[0])
-            encoder_latent += [0, 64, 128, 256, 512, 1024][cfg.encoder.spatial.num_layers]
+            #encoder_latent += [0, 64, 128, 256, 512, 1024][cfg.encoder.spatial.num_layers]  # for resnet34
+            encoder_latent += 1856  # if resnet50
+
         #if cfg.encoder.use_pointnet:
         #    self.pointnet = LocalPoolPointnet.from_conf(self.cfg.encoder.pointnet)
         #    self.merger = FeaturePlaneMerger.from_conf(cfg.encoder.plane_merger, c_dim=cfg.encoder.pointnet.c_dim)
@@ -47,6 +49,7 @@ class VoxelNet(L.LightningModule):
 
         # other params
         self.origin = torch.tensor([0,0,0]).view(1,3)
+        self.voxel_size = cfg.voxel_size
         self.voxel_sizes = [int(cfg.voxel_size*100)*2**i for i in 
                             range(len(cfg.backbone3d.layers_down)-1)]
 
@@ -283,14 +286,6 @@ class VoxelNet(L.LightningModule):
         losses['tsdf_loss'] = loss
 
         self.log_loss(losses, B, 'train')
-        
-        # visualize the prediction of the final batch and log it
-        is_last_batch = (batch_idx == len(self.trainer.val_dataloaders) - 1)
-        if is_last_batch:
-            b = 0
-            self.initialize_volume()
-            self.encode(batch['projection'][b:b+1], batch['image'][b:b+1], batch['depth'][b:b+1], 'train')  # encode images of whole sequence at once
-            self.geometric_reconstruction(batch, outputs, b_idx=b)
 
         torch.cuda.empty_cache()
         return loss
@@ -309,7 +304,7 @@ class VoxelNet(L.LightningModule):
         outputs, losses = self.forward(batch)
 
         loss = sum(losses.values())
-        losses['total_tsdf'] = loss
+        losses['tsdf_loss'] = loss
 
         self.log_loss(losses, B, 'val')
         
@@ -337,7 +332,7 @@ class VoxelNet(L.LightningModule):
         outputs, losses = self.forward(batch)
 
         loss = sum(losses.values())
-        losses['combined'] = loss
+        losses['tsdf_loss'] = loss
 
         self.log_loss(losses, B, 'test')
         
