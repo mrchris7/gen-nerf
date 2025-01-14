@@ -20,6 +20,7 @@ import json
 import tarfile
 import numpy as np
 from PIL import Image
+from src.data import transforms
 import torch
 import trimesh
 from src.data.tsdf import TSDF
@@ -286,34 +287,39 @@ class SceneDataset(torch.utils.data.Dataset):
         # TODO: also get vertex instances/semantics
         return trimesh.load(self.info['file_name_mesh_gt'], process=False)
 
-# not used
+# used for inference
 class ScenesDataset(torch.utils.data.Dataset):
-    """ Pytorch Dataset for a multiple scenes
+    """ Pytorch Dataset for multiple scenes
     
     getitem loads a sequence of frames from a scene
     along with the corresponding TSDF for the scene
     """
 
-    def __init__(self, info_files, num_frames, transform=None, frame_types=[],
-                 frame_selection='random', voxel_types=[], voxel_sizes=[]):
+    def __init__(self, info_files, num_frames, frame_locations, frame_order, transform=None,
+                 frame_types=[], voxel_types=[], voxel_sizes=[], from_archive=True, voxel_dim=None):
         """
         Args:
             info_files: list of info_json files
-            num_frames: number of frames in the sequence to load
+            num_frames: number of frames in the sequence to load (-1 for all frames of a scene)
+            frame_locations: the location of frames in a sequence
+            frame_order: choose the frame order
             transform: apply preprocessing transform to images and TSDF
             frame_types: which images to load (ex: depth, semseg, etc)
-            frame_selection: how to choose the frames in the sequence
             voxel_types: list of voxel attributes to load with the TSDF
             voxel_sizes: list of voxel sizes to load
+            from_archive: whether data is stored in an archive
         """
 
         self.info_files = info_files
         self.num_frames = num_frames
+        self.frame_locations = frame_locations
+        self.frame_order = frame_order
         self.transform = transform
         self.frame_types = frame_types
-        self.frame_selection = frame_selection
         self.voxel_types = voxel_types
         self.voxel_sizes = voxel_sizes
+        self.from_archive = from_archive
+        self.voxel_dim = voxel_dim
 
     def __len__(self):
         return len(self.info_files)
@@ -324,9 +330,15 @@ class ScenesDataset(torch.utils.data.Dataset):
         info = load_info_json(self.info_files[i])
 
         frame_ids = self.get_frame_ids(info)
-        #print(frame_ids)
-        frames = [map_frame(info['frames'][i], self.frame_types)
-                  for i in frame_ids]  # TODO: move loop into extraction process to only open tar-file only once
+
+        if self.frame_order=='random':
+            pass  # already random
+        elif self.frame_order=='sorted':
+            frame_ids.sort()
+        else:
+            raise NotImplementedError(f"frame_order: {self.frame_order}")
+
+        frames = map_frames(info['frames'], frame_ids, self.frame_types, self.from_archive)
 
         data = {'dataset': info['dataset'],
                 'scene': info['scene'],
@@ -339,18 +351,61 @@ class ScenesDataset(torch.utils.data.Dataset):
         # apply transforms
         if self.transform is not None:
             data = self.transform(data)
+        else:
+            # from Atlas, inference.py
+            # predict for evaluation
+
+            voxel_scale = self.voxel_sizes[0]
+            
+            # compute voxel origin
+            if 'file_name_vol_%02d'%voxel_scale in info:
+                # compute voxel origin from ground truth
+                tsdf_trgt = data['vol_%02d'%voxel_scale]
+                voxel_size = float(voxel_scale)/100
+                # shift by integer number of voxels for padding
+                shift = torch.tensor([.5, .5, .5])//voxel_size
+                offset = tsdf_trgt.origin - shift*voxel_size
+
+            else:
+                # use default origin
+                # assume floor is a z=0 so pad bottom a bit
+                offset = torch.tensor([0,0,-.5])
+
+            data['offset'] = offset.view(1,3)  # apply on tsdf_pred.origin TODO: check if transformation to Tensor should be done later in transform ?
+            T = torch.eye(4)
+            T[:3,3] = offset
+
+            transform = transforms.Compose([
+                transforms.ResizeImage((640,480)),
+                transforms.ToTensor(),
+                transforms.TransformSpace(T, self.voxel_dim, [0,0,0]),
+                transforms.FlattenTSDF(),
+                transforms.IntrinsicsPoseToProjection(),
+            ])
+            
+            data = transform(data)
 
         return data
 
     def get_frame_ids(self, info):
         """ Get the ids of the frames to load"""
 
-        if self.frame_selection=='random':
-            # select num_frames random frames from the scene
-            return torch.randint(len(info['frames']), size=[self.num_frames])
+        length = len(info['frames'])
+        if self.num_frames == -1 or self.num_frames > length:
+            num_frames = length
         else:
-            raise NotImplementedError('frame selection %s'%self.frame_selection)
-        
+            num_frames = self.num_frames
+
+        if self.frame_locations=='random':
+            # select num_frames random frames from the scene
+            return torch.randint(len(info['frames']), size=[num_frames])
+        elif self.frame_locations=='evenly_spaced':
+            selected_idxs = np.linspace(0, length-1, num_frames, dtype=int)
+            np.random.shuffle(selected_idxs)
+            return selected_idxs
+        else:
+            raise NotImplementedError(f"frame_locations: {self.frame_locations}")
+
 
 class ScenesSequencesDataset(torch.utils.data.Dataset):
     """ Pytorch Dataset for a multiple scenes and multiple sequences per scene
@@ -371,7 +426,7 @@ class ScenesSequencesDataset(torch.utils.data.Dataset):
             sequence_order: choose the sequence order
             num_frames: number of frames in the sequence to load
             frame_locations: the location of frames in a sequence
-            frame_order: choose the sequence order
+            frame_order: choose the frame order
             transform: apply preprocessing transform to images and TSDF
             frame_types: which images to load (ex: depth, semseg, etc)
             voxel_types: list of voxel attributes to load with the TSDF

@@ -350,6 +350,38 @@ class VoxelNet(L.LightningModule):
         #        self.geometric_reconstruction("test", batch, outputs, b_idx=b)
 
         return loss
+    
+    def predict_step(self, batch, batch_idx):
+        
+        image = batch['image'] # (B, T, 3, H, W)
+        depth = batch['depth'] # (B, T, H, W)
+        projection = batch['projection']  # (B, T, 3, 4) world2image
+        B = image.shape[0]
+        assert B == 1
+
+        self.initialize_volume()
+        torch.cuda.empty_cache()
+
+        self.encode(projection, image, depth)  # encode images of whole sequence at once
+        # TODO: test merging vs processing all observations at once
+
+        outputs, losses = self.forward()
+
+        self.geometric_reconstruction("pred", batch, outputs, b_idx=0)
+
+        tsdf_pred = self.postprocess(outputs)[0]
+
+        # TODO: set origin in model... make consistent with offset above?
+        #print("offset:", batch['offset'])
+        #tsdf_pred.origin = batch['offset'][0]
+    
+        mesh_pred = tsdf_pred.get_mesh()
+
+        scene = batch['scene'][0]
+        tsdf_pred.save(os.path.join(self.cfg.output_dir, f'{scene}.npz'))
+        mesh_pred.export(os.path.join(self.cfg.output_dir, f'{scene}.ply'))
+
+        return
 
     def geometric_reconstruction(self, mode, batch, outputs, b_idx=0):
         

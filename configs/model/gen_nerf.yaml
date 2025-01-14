@@ -17,6 +17,7 @@ voxel_size: ${data.voxel_size}
 voxel_dim_train: ${data.voxel_dim_train}
 voxel_dim_val: ${data.voxel_dim_val}
 voxel_dim_test: ${data.voxel_dim_test}
+output_dir: "${paths.output_dir}"
 
 sampling_mode: 'ray'  # 'ray' or 'frustum'
 ray:  # follows iSDF

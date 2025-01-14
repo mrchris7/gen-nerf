@@ -25,7 +25,8 @@ os.environ['LIBGL_ALWAYS_SOFTWARE'] = '1'  # force software rendering
 class GenNerf(L.LightningModule):
     def __init__(self, cfg):
         super().__init__()
-        self.cfg = cfg
+        self.save_hyperparameters(logger=False)
+        self.cfg = cfg  # TODO: excange self.cfg with self.hparams
 
         # teacher net
         self.f_teacher = None  # TODO

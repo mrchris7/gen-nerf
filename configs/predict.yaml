@@ -1,0 +1,26 @@
+# @package _global_
+
+defaults:
+  - _self_
+  - data: scenes
+  #- model: null  # model config is saved with ckpt
+  - logger: null
+  - trainer: default
+  - paths: default
+  - extras: default
+  - hydra: default
+
+  # experiment configs allow for version control of specific hyperparameters
+  # e.g. best hyperparameters for given model and datamodule
+  - experiment: null
+
+task_name: "predict"
+
+tags: ["dev"]
+
+experiment: None
+
+model_type: 'VoxelNet'
+
+# passing checkpoint path is necessary for evaluation
+ckpt_path: ???

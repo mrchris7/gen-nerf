@@ -94,6 +94,7 @@ def train(cfg: DictConfig) -> Tuple[Dict[str, Any], Dict[str, Any]]:
         trainer.fit(model=model, datamodule=datamodule, ckpt_path=cfg.get("ckpt_path"))
 
     train_metrics = trainer.callback_metrics
+    test_metrics = {}
 
     if cfg.get("test"):
         log.info("Starting testing!")
@@ -102,17 +103,12 @@ def train(cfg: DictConfig) -> Tuple[Dict[str, Any], Dict[str, Any]]:
             log.warning("Best ckpt not found! Using current weights for testing...")
             ckpt_path = None
         
-        # Instantiate test trainer with 1 device
-        test_cfg = cfg.trainer.copy()
-        test_cfg.devices = 1  # ensure each sample/batch gets evaluated exactly once
-        if 'strategy' in test_cfg:
-            test_cfg.strategy = 'auto'
-        trainer_test: Trainer = hydra.utils.instantiate(test_cfg, callbacks=callbacks, logger=logger)
+        trainer_test: Trainer = hydra.utils.instantiate(cfg.trainer, callbacks=callbacks, logger=logger)
 
         trainer_test.test(model=model, datamodule=datamodule, ckpt_path=ckpt_path)
         log.info(f"Best ckpt path: {ckpt_path}")
 
-    test_metrics = trainer_test.callback_metrics
+        test_metrics = trainer_test.callback_metrics
 
     # merge train and test metrics
     metric_dict = {**train_metrics, **test_metrics}

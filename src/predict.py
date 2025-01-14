@@ -6,6 +6,7 @@ from lightning import LightningDataModule, LightningModule, Trainer
 from lightning.pytorch.loggers import Logger
 from omegaconf import DictConfig
 from src.models.model import GenNerf
+from src.models.voxel_net import VoxelNet
 
 rootutils.setup_root(__file__, indicator=".project-root", pythonpath=True)
 # ------------------------------------------------------------------------------------ #
@@ -37,8 +38,8 @@ log = RankedLogger(__name__, rank_zero_only=True)
 
 
 @task_wrapper
-def evaluate(cfg: DictConfig) -> Tuple[Dict[str, Any], Dict[str, Any]]:
-    """Evaluates given checkpoint on a datamodule testset.
+def predict(cfg: DictConfig) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+    """Predicts given checkpoint on a datamodule testset.
 
     This method is wrapped in optional @task_wrapper decorator, that controls the behavior during
     failure. Useful for multiruns, saving info about the crash, etc.
@@ -51,19 +52,18 @@ def evaluate(cfg: DictConfig) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     log.info(f"Instantiating datamodule <{cfg.data._target_}>")
     datamodule: LightningDataModule = hydra.utils.instantiate(cfg.data)
 
-    log.info(f"Instantiating model <{cfg.model.type}>")
-    if cfg.model.type == "GenNerf":
-        model = GenNerf(cfg.model)
+    log.info(f"Instantiating model <{cfg.model_type}>")
+    if cfg.model_type == "GenNerf":
+        #model = GenNerf(cfg.model)
+        model = GenNerf.load_from_checkpoint(cfg.ckpt_path)
+    elif cfg.model_type == "VoxelNet":
+        model = VoxelNet.load_from_checkpoint(cfg.ckpt_path)
 
     log.info("Instantiating loggers...")
     logger: List[Logger] = instantiate_loggers(cfg.get("logger"))
 
     log.info(f"Instantiating trainer <{cfg.trainer._target_}>")
-    # Instantiate test trainer with 1 device
-    if cfg.trainer.devices != 1:
-        #cfg.devices = 1  # ensure each sample/batch gets evaluated exactly once
-        #cfg.strategy = 'auto'
-        log.warning("Consider using only one device to allow for reproducable evaluation results.")
+    
     trainer: Trainer = hydra.utils.instantiate(cfg.trainer, logger=logger)
 
     object_dict = {
@@ -78,20 +78,18 @@ def evaluate(cfg: DictConfig) -> Tuple[Dict[str, Any], Dict[str, Any]]:
         log.info("Logging hyperparameters!")
         log_hyperparameters(object_dict)
 
-    log.info("Starting testing!")
-    trainer.test(model=model, datamodule=datamodule, ckpt_path=cfg.ckpt_path)
-
-    # for predictions use trainer.predict(...)
-    # predictions = trainer.predict(model=model, dataloaders=dataloaders, ckpt_path=cfg.ckpt_path)
+    log.info("Starting predicting!")
+    trainer.predict(model=model, datamodule=datamodule, ckpt_path=cfg.ckpt_path, return_predictions=False)  
+    # TODO: ... or maybe use model from outside see Atlas: inference.py
 
     metric_dict = trainer.callback_metrics
 
     return metric_dict, object_dict
 
 
-@hydra.main(version_base="1.3", config_path="../configs", config_name="eval.yaml")
+@hydra.main(version_base="1.3", config_path="../configs", config_name="predict.yaml")
 def main(cfg: DictConfig) -> None:
-    """Main entry point for evaluation.
+    """Main entry point for prediction.
 
     :param cfg: DictConfig configuration composed by Hydra.
     """
@@ -99,7 +97,7 @@ def main(cfg: DictConfig) -> None:
     # (e.g. ask for tags if none are provided in cfg, print cfg tree, etc.)
     extras(cfg)
 
-    evaluate(cfg)
+    predict(cfg)
 
 
 if __name__ == "__main__":
